@@ -101,10 +101,13 @@ class _LoginPageState extends State<LoginPage> {
   String _networkErrorMessage(Object error) {
     if (error is DioException) {
       final message = error.message ?? '';
+      if (message.contains('Operation not permitted') ||
+          message.contains('Network is unreachable')) {
+        return 'iOS 未放行网络访问，巨魔安装请在“设置-无线局域网/蜂窝网络”查找“铝模工作录”，或卸载后重装触发网络授权';
+      }
       if (message.contains('SocketException') ||
-          message.contains('Network is unreachable') ||
           message.contains('Connection failed')) {
-        return '网络不可用，请在 iPhone 设置中允许本软件使用无线局域网与蜂窝数据';
+        return '网络连接失败：${message.ifEmpty(error.type.name)}';
       }
       if (message.contains('ATS') || message.contains('cleartext')) {
         return 'iOS 已拦截 HTTP 网络请求，请重新打包安装最新版';
