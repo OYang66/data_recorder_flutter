@@ -30,6 +30,8 @@ class MainActivity : FlutterActivity() {
     private var pendingCameraUri: Uri? = null
     private var pendingSpeechResult: MethodChannel.Result? = null
     private var pendingFileResult: MethodChannel.Result? = null
+    private var deliveryOrderIntakeChannel: MethodChannel? = null
+    private var pendingExternalDeliveryOrderFile: Map<String, Any?>? = null
     private var fastSparkInitialized = false
     private var fastSparkAsr: ASR? = null
     private var fastSparkSessionIndex = 0
@@ -187,6 +189,23 @@ class MainActivity : FlutterActivity() {
             }
         }
 
+        deliveryOrderIntakeChannel = MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            "com.example.datarecorder/delivery_order_intake"
+        ).also { channel ->
+            channel.setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "getInitialDeliveryOrderFile" -> {
+                        val file = pendingExternalDeliveryOrderFile
+                        pendingExternalDeliveryOrderFile = null
+                        result.success(file)
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+        }
+        handleExternalDeliveryOrderIntent(intent)
+
         MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
             "com.example.datarecorder/legacy_database"
@@ -214,6 +233,12 @@ class MainActivity : FlutterActivity() {
                 else -> result.notImplemented()
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleExternalDeliveryOrderIntent(intent)
     }
 
     @Deprecated("Deprecated in Java")
@@ -606,6 +631,48 @@ class MainActivity : FlutterActivity() {
         startActivityForResult(intent, 7012)
     }
 
+    private fun handleExternalDeliveryOrderIntent(intent: Intent?): Boolean {
+        val uri = extractExternalDeliveryOrderUri(intent) ?: return false
+        if (!isSupportedDeliveryOrderFile(uri)) return false
+        return try {
+            val path = copyContentUriToCache(uri)
+            val payload = mapOf(
+                "path" to path,
+                "fileName" to File(path).name,
+                "source" to "android_intent"
+            )
+            pendingExternalDeliveryOrderFile = payload
+            deliveryOrderIntakeChannel?.invokeMethod("onDeliveryOrderFile", payload)
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun extractExternalDeliveryOrderUri(intent: Intent?): Uri? {
+        if (intent == null) return null
+        return when (intent.action) {
+            Intent.ACTION_SEND -> {
+                @Suppress("DEPRECATION")
+                intent.getParcelableExtra(Intent.EXTRA_STREAM) as? Uri ?: intent.data
+            }
+            Intent.ACTION_VIEW -> intent.data
+            else -> null
+        }
+    }
+
+    private fun isSupportedDeliveryOrderFile(uri: Uri): Boolean {
+        val name = queryDisplayName(uri).ifBlank { uri.lastPathSegment.orEmpty() }.lowercase()
+        if (name.endsWith(".xlsx") || name.endsWith(".xls") || name.endsWith(".zip")) return true
+        return when (contentResolver.getType(uri)?.lowercase()) {
+            "application/vnd.ms-excel",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "application/zip",
+            "application/x-zip-compressed" -> true
+            else -> false
+        }
+    }
+
     private fun pickDeliveryOrderFile(result: MethodChannel.Result) {
         if (pendingFileResult != null) {
             result.success("")
@@ -627,11 +694,19 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun copyContentUriToCache(uri: Uri): String {
-        val name = queryDisplayName(uri).ifBlank { "delivery_order_${System.currentTimeMillis()}.xlsx" }
+        val fallbackName = uri.lastPathSegment?.substringAfterLast('/')?.takeIf { it.isNotBlank() }
+            ?: "delivery_order_${System.currentTimeMillis()}.xlsx"
+        val name = queryDisplayName(uri).ifBlank { fallbackName }
         val safeName = name.replace(Regex("[\\\\/:*?\"<>|]"), "_")
         val file = java.io.File(cacheDir, safeName)
-        contentResolver.openInputStream(uri)?.use { input ->
-            file.outputStream().use { output -> input.copyTo(output) }
+        if (uri.scheme == "file") {
+            java.io.File(uri.path.orEmpty()).inputStream().use { input ->
+                file.outputStream().use { output -> input.copyTo(output) }
+            }
+        } else {
+            contentResolver.openInputStream(uri)?.use { input ->
+                file.outputStream().use { output -> input.copyTo(output) }
+            }
         }
         return file.absolutePath
     }

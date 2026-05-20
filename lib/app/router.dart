@@ -2,6 +2,7 @@ import 'package:go_router/go_router.dart';
 
 import '../features/auth/login_page.dart';
 import '../features/auth/register_page.dart';
+import '../features/delivery_order/delivery_order_intake_service.dart';
 import '../features/delivery_order/delivery_order_page.dart';
 import '../features/main/main_page.dart';
 import '../features/settlement/settlement_data_page.dart';
@@ -22,7 +23,11 @@ final appRouter = GoRouter(
     GoRoute(path: '/update', builder: (context, state) => const UpdatePage()),
     GoRoute(
       path: '/delivery-order',
-      builder: (context, state) => const DeliveryOrderPage(),
+      builder: (context, state) => DeliveryOrderPage(
+        externalFile: state.extra is ExternalDeliveryOrderFile
+            ? state.extra! as ExternalDeliveryOrderFile
+            : null,
+      ),
     ),
     GoRoute(
       path: '/settlement-data',

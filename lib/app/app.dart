@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../core/storage/preferences.dart';
+import '../features/delivery_order/delivery_order_intake_service.dart';
 import 'lifecycle_observer.dart';
 import 'router.dart';
 import 'theme.dart';
@@ -16,6 +17,7 @@ class DataRecorderApp extends StatefulWidget {
 
 class _DataRecorderAppState extends State<DataRecorderApp> {
   StreamSubscription<String>? _logoutSubscription;
+  StreamSubscription<ExternalDeliveryOrderFile>? _deliveryOrderSubscription;
 
   @override
   void initState() {
@@ -23,11 +25,16 @@ class _DataRecorderAppState extends State<DataRecorderApp> {
     _logoutSubscription = AppPreferences.logoutEvents.listen((_) {
       appRouter.go('/login');
     });
+    DeliveryOrderIntakeService.instance.initialize();
+    _deliveryOrderSubscription = DeliveryOrderIntakeService.instance.files.listen((file) {
+      appRouter.go('/delivery-order', extra: file);
+    });
   }
 
   @override
   void dispose() {
     _logoutSubscription?.cancel();
+    _deliveryOrderSubscription?.cancel();
     super.dispose();
   }
 

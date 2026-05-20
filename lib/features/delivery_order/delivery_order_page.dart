@@ -7,9 +7,12 @@ import '../../core/storage/preferences.dart';
 import '../../core/widgets/app_dialog_chrome.dart';
 import '../../data/models/api/server_models.dart';
 import '../../data/repositories/server_repository.dart';
+import 'delivery_order_intake_service.dart';
 
 class DeliveryOrderPage extends StatefulWidget {
-  const DeliveryOrderPage({super.key});
+  const DeliveryOrderPage({super.key, this.externalFile});
+
+  final ExternalDeliveryOrderFile? externalFile;
 
   @override
   State<DeliveryOrderPage> createState() => _DeliveryOrderPageState();
@@ -40,12 +43,29 @@ class _DeliveryOrderPageState extends State<DeliveryOrderPage> {
     _loadCurrentUserId();
     _loadProjectNames();
     _loadFiles();
+    final externalFile = widget.externalFile;
+    if (externalFile != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _confirmExternalDeliveryOrderFile(externalFile);
+      });
+    }
   }
 
   Future<void> _loadCurrentUserId() async {
     final userId = await _preferences.getUserId();
     if (!mounted) return;
     setState(() => _currentUserId = userId);
+  }
+
+  @override
+  void didUpdateWidget(covariant DeliveryOrderPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final externalFile = widget.externalFile;
+    if (externalFile != null && externalFile.path != oldWidget.externalFile?.path) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _confirmExternalDeliveryOrderFile(externalFile);
+      });
+    }
   }
 
   @override
@@ -107,7 +127,26 @@ class _DeliveryOrderPageState extends State<DeliveryOrderPage> {
     try {
       final path = await _exportChannel.invokeMethod<String>('pickDeliveryOrderFile');
       if (path == null || path.isEmpty) return;
-      setState(() => _uploading = true);
+      await _uploadDeliveryOrderFromPath(
+        path,
+        calculateNetWeight: calculateNetWeight,
+      );
+    } on MissingPluginException {
+      if (mounted) _showMessage('当前版本不支持选择文件，请更新应用');
+    } on PlatformException catch (error) {
+      if (mounted) _showMessage(error.message ?? '文件选择失败，请检查文件权限');
+    } catch (_) {
+      if (mounted) _showMessage('文件选择失败，请检查文件权限');
+    }
+  }
+
+  Future<void> _uploadDeliveryOrderFromPath(
+    String path, {
+    required bool calculateNetWeight,
+  }) async {
+    if (_uploading || path.trim().isEmpty) return;
+    setState(() => _uploading = true);
+    try {
       final response = await _repository.uploadDeliveryOrder(
         filePath: path,
         calculateNetWeight: calculateNetWeight,
@@ -117,10 +156,33 @@ class _DeliveryOrderPageState extends State<DeliveryOrderPage> {
           ? response.displayMessage.ifEmpty('上传成功')
           : response.displayMessage.ifEmpty('上传失败'));
       if (response.isSuccess) await _loadFiles(pageNum: 1);
-    } catch (error) {
+    } catch (_) {
       if (mounted) _showMessage('上传失败，请检查网络、登录状态和文件格式');
     } finally {
       if (mounted) setState(() => _uploading = false);
+    }
+  }
+
+  Future<void> _confirmExternalDeliveryOrderFile(
+    ExternalDeliveryOrderFile file,
+  ) async {
+    if (_uploading) return;
+    final confirmed = await showAppCardDialog<bool>(
+      context: context,
+      title: '上传发货清单',
+      subtitle: '是否上传文件“${file.fileName}”？',
+      builder: (context) => AppDialogActionRow(
+        cancelText: '取消',
+        confirmText: '上传',
+        onCancel: () => Navigator.of(context).pop(false),
+        onConfirm: () => Navigator.of(context).pop(true),
+      ),
+    );
+    if (confirmed == true) {
+      await _uploadDeliveryOrderFromPath(
+        file.path,
+        calculateNetWeight: false,
+      );
     }
   }
 
@@ -509,7 +571,11 @@ class _DeliveryOrderPageState extends State<DeliveryOrderPage> {
             'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
         'title': '分享发货清单',
       });
-    } catch (error) {
+    } on MissingPluginException {
+      if (mounted) _showMessage('当前版本不支持系统分享，请更新应用');
+    } on PlatformException catch (error) {
+      if (mounted) _showMessage(error.message ?? '系统分享失败，请稍后重试');
+    } catch (_) {
       if (mounted) _showMessage('下载失败，请检查网络和登录状态');
     }
   }

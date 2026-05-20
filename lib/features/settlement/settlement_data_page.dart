@@ -266,7 +266,11 @@ class _SettlementDataPageState extends State<SettlementDataPage> {
             'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
         'title': '分享$_dataTypeLabel',
       });
-    } catch (error) {
+    } on MissingPluginException {
+      if (mounted) _showMessage('当前版本不支持系统分享，请更新应用');
+    } on PlatformException catch (error) {
+      if (mounted) _showMessage(error.message ?? '系统分享失败，请稍后重试');
+    } catch (_) {
       if (mounted) _showMessage('导出失败，请检查网络和登录状态');
     }
   }
