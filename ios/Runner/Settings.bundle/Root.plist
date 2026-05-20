@@ -16,7 +16,7 @@
 			<key>Title</key>
 			<string>服务器地址</string>
 			<key>DefaultValue</key>
-			<string>175.178.12.210:82</string>
+			<string>https://yxff.work/prod-api/</string>
 		</dict>
 		<dict>
 			<key>Type</key>
