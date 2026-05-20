@@ -1,3 +1,4 @@
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
@@ -75,7 +76,7 @@ class _RegisterPageState extends State<RegisterPage> {
       }
     } catch (error) {
       if (mounted) {
-        _showMessage('网络异常，请稍后重试');
+        _showMessage(_networkErrorMessage(error));
       }
     } finally {
       if (mounted) {
@@ -86,6 +87,22 @@ class _RegisterPageState extends State<RegisterPage> {
 
   void _showMessage(String message) {
     showAppToast(context, message);
+  }
+
+  String _networkErrorMessage(Object error) {
+    if (error is DioException) {
+      final message = error.message ?? '';
+      if (message.contains('SocketException') ||
+          message.contains('Network is unreachable') ||
+          message.contains('Connection failed')) {
+        return '网络不可用，请在 iPhone 设置中允许本软件使用无线局域网与蜂窝数据';
+      }
+      if (message.contains('ATS') || message.contains('cleartext')) {
+        return 'iOS 已拦截 HTTP 网络请求，请重新打包安装最新版';
+      }
+      return '网络异常：${message.ifEmpty(error.type.name)}';
+    }
+    return '网络异常，请稍后重试';
   }
 
   Future<void> _openTutorial() async {
