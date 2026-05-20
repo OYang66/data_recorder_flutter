@@ -7,12 +7,28 @@ val localProperties = Properties().apply {
     }
 }
 
+val parentLocalProperties = Properties().apply {
+    val file = rootProject.file("../../local.properties")
+    if (file.exists()) {
+        file.inputStream().use(::load)
+    }
+}
+
 fun localOrEnv(vararg names: String): String {
     return names.firstNotNullOfOrNull { name ->
         localProperties.getProperty(name)?.takeIf { it.isNotBlank() }
+            ?: parentLocalProperties.getProperty(name)?.takeIf { it.isNotBlank() }
             ?: System.getenv(name)?.takeIf { it.isNotBlank() }
     }?.trim().orEmpty()
 }
+
+fun buildConfigString(value: String): String {
+    return "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+}
+
+val sparkAppId = localOrEnv("SPARK_APP_ID", "XUNFEI_SPARK_APP_ID")
+val sparkApiKey = localOrEnv("SPARK_API_KEY", "XUNFEI_SPARK_API_KEY")
+val sparkApiSecret = localOrEnv("SPARK_API_SECRET", "XUNFEI_SPARK_API_SECRET")
 
 val dataRecorderStoreFile = localOrEnv("DATARECORDER_STORE_FILE")
 val dataRecorderStorePassword = localOrEnv("DATARECORDER_STORE_PASSWORD")
@@ -55,6 +71,13 @@ android {
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        buildConfigField("String", "SPARK_APP_ID", buildConfigString(sparkAppId))
+        buildConfigField("String", "SPARK_API_KEY", buildConfigString(sparkApiKey))
+        buildConfigField("String", "SPARK_API_SECRET", buildConfigString(sparkApiSecret))
+    }
+
+    buildFeatures {
+        buildConfig = true
     }
 
     signingConfigs {
@@ -79,4 +102,9 @@ android {
 
 flutter {
     source = "../.."
+}
+
+dependencies {
+    implementation(files("libs/SparkChain.aar"))
+    implementation(files("libs/Codec.aar"))
 }

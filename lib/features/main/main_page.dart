@@ -102,7 +102,14 @@ class _MainPageState extends State<MainPage> with WidgetsBindingObserver {
   String? _lastSubDisplayPayload;
   bool _loading = true;
   bool _fastVoicePressed = false;
+  bool _fastVoiceStarting = false;
+  bool _fastVoiceListening = false;
+  bool _fastVoiceWaitingResult = false;
+  bool _fastVoiceDialogVisible = false;
+  OverlayEntry? _fastVoiceDialogEntry;
   DateTime? _fastVoicePressStartedAt;
+  Timer? _fastVoiceTimeoutTimer;
+  int _fastVoiceHoldGeneration = 0;
 
   @override
   void initState() {
@@ -121,6 +128,8 @@ class _MainPageState extends State<MainPage> with WidgetsBindingObserver {
     _saveCurrentDraft();
     _historyBackupTimer?.cancel();
     _subDisplayStatusTimer?.cancel();
+    _fastVoiceTimeoutTimer?.cancel();
+    unawaited(_fastVoiceChannel.invokeMethod<void>('cancelListening'));
     super.dispose();
   }
 
@@ -3533,7 +3542,6 @@ class _MainPageState extends State<MainPage> with WidgetsBindingObserver {
         onNewColumn: _nextColumn,
         onNewLine: _newLine,
         voicePressed: _fastVoicePressed,
-        onVoiceTap: () => _showNotReady('请长按后说话'),
         onVoiceStart: _startFastVoiceHold,
         onVoiceEnd: () => unawaited(_finishFastVoiceHold()),
         onVoiceCancel: () => unawaited(_cancelFastVoiceHold()),
@@ -3569,57 +3577,222 @@ class _MainPageState extends State<MainPage> with WidgetsBindingObserver {
   }
 
   void _startFastVoiceHold() {
-    setState(() {
-      _fastVoicePressed = true;
-      _fastVoicePressStartedAt = DateTime.now();
-    });
+    unawaited(_beginFastVoiceHold());
   }
 
-  Future<void> _finishFastVoiceHold() async {
-    final startedAt = _fastVoicePressStartedAt;
-    setState(() {
-      _fastVoicePressed = false;
-      _fastVoicePressStartedAt = null;
-    });
-    if (startedAt == null) return;
-    if (DateTime.now().difference(startedAt).inMilliseconds < 300) {
-      _showNotReady('请长按后说话');
+  Future<void> _beginFastVoiceHold() async {
+    if (_fastVoiceStarting || _fastVoiceListening || _fastVoiceWaitingResult) {
+      _showNotReady('语音识别正在进行中');
       return;
     }
-    await _startFastVoiceInput();
-  }
-
-  Future<void> _cancelFastVoiceHold() async {
+    final holdGeneration = ++_fastVoiceHoldGeneration;
     setState(() {
-      _fastVoicePressed = false;
-      _fastVoicePressStartedAt = null;
+      _fastVoicePressed = true;
+      _fastVoiceStarting = true;
+      _fastVoicePressStartedAt = DateTime.now();
     });
-  }
-
-  Future<void> _startFastVoiceInput() async {
     try {
-      final text = await _fastVoiceChannel.invokeMethod<String>('recognize');
-      if (text == null || text.trim().isEmpty) return;
-      final pair = _parseFastVoiceSizePair(text);
-      if (pair == null) {
-        _showNotReady('未识别到尺寸格式，请说类似‘200乘300’或‘400乘1米1’');
-        return;
-      }
-      final width = double.tryParse(pair.$1) ?? 0;
-      final length = double.tryParse(pair.$2) ?? 0;
-      if (width > 600 || length > 4500) {
-        _showNotReady('识别成功，但尺寸超出当前 FAST 可录入范围');
+      await _fastVoiceChannel.invokeMethod<void>('startListening');
+      if (!mounted || holdGeneration != _fastVoiceHoldGeneration) return;
+      if (!_fastVoicePressed) {
+        setState(() {
+          _fastVoiceStarting = false;
+          _fastVoiceListening = false;
+          _fastVoicePressStartedAt = null;
+        });
+        await _fastVoiceChannel.invokeMethod<void>('cancelListening');
         return;
       }
       setState(() {
-        _fastCurrent['width'] = pair.$1;
-        _fastCurrent['length'] = pair.$2;
-        _fastField = FastField.width;
+        _fastVoiceStarting = false;
+        _fastVoiceListening = true;
       });
-      await _finishCurrentRow();
+      _showFastVoiceHoldDialog();
+      _fastVoiceTimeoutTimer?.cancel();
+      _fastVoiceTimeoutTimer = Timer(
+        const Duration(seconds: 12),
+        () => unawaited(_finishFastVoiceHold(timedOut: true)),
+      );
     } catch (error) {
-      if (mounted) _showNotReady('语音识别失败，请检查录音权限和系统语音服务');
+      _fastVoiceTimeoutTimer?.cancel();
+      _dismissFastVoiceHoldDialog();
+      if (!mounted || holdGeneration != _fastVoiceHoldGeneration) return;
+      setState(() {
+        _fastVoicePressed = false;
+        _fastVoiceStarting = false;
+        _fastVoiceListening = false;
+        _fastVoiceWaitingResult = false;
+        _fastVoicePressStartedAt = null;
+      });
+      _showNotReady(_fastVoiceErrorMessage(error));
     }
+  }
+
+  Future<void> _finishFastVoiceHold({bool timedOut = false}) async {
+    if (!_fastVoiceStarting && !_fastVoiceListening && !_fastVoicePressed) {
+      _dismissFastVoiceHoldDialog();
+      return;
+    }
+    final startedAt = _fastVoicePressStartedAt;
+    final tooShort = !timedOut &&
+        startedAt != null &&
+        DateTime.now().difference(startedAt).inMilliseconds < 300;
+    _fastVoiceTimeoutTimer?.cancel();
+    if (tooShort || _fastVoiceStarting) {
+      await _cancelFastVoiceHold(showTooShortToast: tooShort);
+      return;
+    }
+    setState(() {
+      _fastVoicePressed = false;
+      _fastVoiceStarting = false;
+      _fastVoiceListening = false;
+      _fastVoiceWaitingResult = true;
+      _fastVoicePressStartedAt = null;
+    });
+    try {
+      final text = await _fastVoiceChannel.invokeMethod<String>('stopListening');
+      _dismissFastVoiceHoldDialog();
+      if (!mounted) return;
+      if (text == null || text.trim().isEmpty) {
+        _showNotReady('未识别到清晰语音');
+        return;
+      }
+      await _applyFastVoiceText(text);
+    } catch (error) {
+      _dismissFastVoiceHoldDialog();
+      if (mounted) _showNotReady(_fastVoiceErrorMessage(error));
+    } finally {
+      if (mounted) {
+        setState(() {
+          _fastVoicePressed = false;
+          _fastVoiceStarting = false;
+          _fastVoiceListening = false;
+          _fastVoiceWaitingResult = false;
+          _fastVoicePressStartedAt = null;
+        });
+      }
+    }
+  }
+
+  Future<void> _cancelFastVoiceHold({bool showTooShortToast = false}) async {
+    _fastVoiceHoldGeneration++;
+    _fastVoiceTimeoutTimer?.cancel();
+    try {
+      await _fastVoiceChannel.invokeMethod<void>('cancelListening');
+    } catch (_) {}
+    _dismissFastVoiceHoldDialog();
+    if (!mounted) return;
+    setState(() {
+      _fastVoicePressed = false;
+      _fastVoiceStarting = false;
+      _fastVoiceListening = false;
+      _fastVoiceWaitingResult = false;
+      _fastVoicePressStartedAt = null;
+    });
+    if (showTooShortToast) {
+      _showNotReady('请长按后说话');
+    }
+  }
+
+  void _showFastVoiceHoldDialog() {
+    if (_fastVoiceDialogVisible || !mounted) return;
+    final overlay = Overlay.of(context, rootOverlay: true);
+    _fastVoiceDialogVisible = true;
+    _fastVoiceDialogEntry = OverlayEntry(
+      builder: (context) => IgnorePointer(
+        child: Material(
+          color: Colors.black.withValues(alpha: 0.28),
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 320),
+              child: Container(
+                margin: const EdgeInsets.symmetric(horizontal: 24),
+                padding: const EdgeInsets.fromLTRB(20, 18, 20, 18),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(18),
+                  boxShadow: const [
+                    BoxShadow(
+                      color: Color(0x33000000),
+                      blurRadius: 18,
+                      offset: Offset(0, 8),
+                    ),
+                  ],
+                ),
+                child: const Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      '正在收听',
+                      style: TextStyle(
+                        color: AppColors.textPrimary,
+                        fontSize: 20,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    SizedBox(height: 6),
+                    Text(
+                      '松开按钮后开始识别',
+                      style: TextStyle(
+                        color: AppColors.textSecondary,
+                        fontSize: 13,
+                      ),
+                    ),
+                    SizedBox(height: 14),
+                    _FastVoiceHoldDialogBody(),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    overlay.insert(_fastVoiceDialogEntry!);
+  }
+
+  void _dismissFastVoiceHoldDialog() {
+    if (!_fastVoiceDialogVisible) return;
+    _fastVoiceDialogVisible = false;
+    _fastVoiceDialogEntry?.remove();
+    _fastVoiceDialogEntry = null;
+  }
+
+  Future<void> _applyFastVoiceText(String text) async {
+    final pair = _parseFastVoiceSizePair(text);
+    if (pair == null) {
+      _showNotReady('未识别到尺寸格式，请说类似‘200乘300’或‘400乘1米1’');
+      return;
+    }
+    final width = double.tryParse(pair.$1) ?? 0;
+    final length = double.tryParse(pair.$2) ?? 0;
+    if (width <= 0 || length <= 0 || width > 600 || length > 4500) {
+      _showNotReady('识别成功，但尺寸超出当前 FAST 可录入范围');
+      return;
+    }
+    setState(() {
+      _fastCurrent['width'] = pair.$1;
+      _fastCurrent['length'] = pair.$2;
+      _fastField = FastField.width;
+    });
+    await _finishCurrentRow();
+  }
+
+  String _fastVoiceErrorMessage(Object error) {
+    if (error is PlatformException) {
+      return switch (error.code) {
+        'permission_denied' => '未授予录音权限，无法使用语音识别',
+        'speech_permission_denied' => '未授予语音识别权限，无法使用语音识别',
+        'unavailable' => '当前设备不支持系统语音识别',
+        'start_failed' => '语音识别启动失败，请稍后重试',
+        _ => error.message?.ifBlank('语音识别失败，请检查录音权限和系统语音服务') ??
+            '语音识别失败，请检查录音权限和系统语音服务',
+      };
+    }
+    if (error is MissingPluginException) {
+      return '当前平台暂不支持语音识别';
+    }
+    return '语音识别失败，请检查录音权限和系统语音服务';
   }
 
   (String, String)? _parseFastVoiceSizePair(String text) {
@@ -5191,7 +5364,7 @@ double _tableDataColumnWidth(
   return (tableWidth - indexWidth) / dataColumnCount;
 }
 
-class _DisplayCard extends StatelessWidget {
+class _DisplayCard extends StatefulWidget {
   const _DisplayCard({
     required this.mode,
     required this.rows,
@@ -5218,20 +5391,48 @@ class _DisplayCard extends StatelessWidget {
   final void Function(int? index, String key) onSelectField;
 
   @override
+  State<_DisplayCard> createState() => _DisplayCardState();
+}
+
+class _DisplayCardState extends State<_DisplayCard> {
+  final ScrollController _scrollController = ScrollController();
+
+  @override
+  void didUpdateWidget(covariant _DisplayCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _scrollToCurrentInputRow();
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  void _scrollToCurrentInputRow() {
+    if (widget.editingRowIndex != null) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_scrollController.hasClients) return;
+      _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final columns = _columnsForMode(mode);
+    final columns = _columnsForMode(widget.mode);
     final editingIndex =
-        editingRowIndex != null &&
-            editingRowIndex! >= 0 &&
-            editingRowIndex! < rows.length
-        ? editingRowIndex
+        widget.editingRowIndex != null &&
+            widget.editingRowIndex! >= 0 &&
+            widget.editingRowIndex! < widget.rows.length
+        ? widget.editingRowIndex
         : null;
     final displayRows = [
-      for (var index = 0; index < rows.length; index++)
-        index == editingIndex ? currentRow : rows[index],
-      if (editingIndex == null) currentRow,
+      for (var index = 0; index < widget.rows.length; index++)
+        index == editingIndex ? widget.currentRow : widget.rows[index],
+      if (editingIndex == null) widget.currentRow,
     ];
-    final selectedDisplayIndex = editingIndex ?? rows.length;
+    final selectedDisplayIndex = editingIndex ?? widget.rows.length;
+    _scrollToCurrentInputRow();
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(4),
@@ -5241,12 +5442,12 @@ class _DisplayCard extends StatelessWidget {
           final tableWidth = _tableWidthFor(
             constraints.maxWidth,
             columns.length,
-            showIndexColumn: showIndexColumn,
+            showIndexColumn: widget.showIndexColumn,
           );
           final dataColumnWidth = _tableDataColumnWidth(
             tableWidth,
             columns.length,
-            showIndexColumn: showIndexColumn,
+            showIndexColumn: widget.showIndexColumn,
           );
           return Column(
             children: [
@@ -5254,14 +5455,14 @@ class _DisplayCard extends StatelessWidget {
                 width: tableWidth,
                 child: _TableLine(
                   rowNumber: null,
-                  showIndexColumn: showIndexColumn,
+                  showIndexColumn: widget.showIndexColumn,
                   columns: columns,
                   row: null,
-                  currentKey: currentKey,
+                  currentKey: widget.currentKey,
                   selectedRow: false,
                   dataColumnWidth: dataColumnWidth,
                   onDelete: null,
-                  onSelectField: (key) => onSelectField(null, key),
+                  onSelectField: (key) => widget.onSelectField(null, key),
                 ),
               ),
               const SizedBox(height: 2),
@@ -5269,31 +5470,33 @@ class _DisplayCard extends StatelessWidget {
                 child: SizedBox(
                   width: tableWidth,
                   child: ListView.builder(
+                    controller: _scrollController,
                     itemCount: displayRows.length,
                     itemBuilder: (context, index) {
-                      final rowIndex = index < rows.length ? index : null;
+                      final rowIndex = index < widget.rows.length ? index : null;
                       final selectedRow = index == selectedDisplayIndex;
                       return _TableLine(
                         rowNumber: index + 1,
-                        showIndexColumn: showIndexColumn,
+                        showIndexColumn: widget.showIndexColumn,
                         columns: columns,
                         row: displayRows[index],
-                        currentKey: selectedRow ? currentKey : '',
+                        currentKey: selectedRow ? widget.currentKey : '',
                         selectedRow: selectedRow,
                         dataColumnWidth: dataColumnWidth,
                         onDelete:
-                            allowDelete &&
+                            widget.allowDelete &&
                                 (rowIndex != null ||
                                     !_isEmptyRow(displayRows[index]))
-                            ? () => onDelete(rowIndex)
+                            ? () => widget.onDelete(rowIndex)
                             : null,
-                        onSelectField: (key) => onSelectField(rowIndex, key),
+                        onSelectField: (key) => widget.onSelectField(rowIndex, key),
                       );
                     },
                   ),
                 ),
               ),
-              if (summaryPrimary.isNotEmpty || summarySecondary.isNotEmpty)
+              if (widget.summaryPrimary.isNotEmpty ||
+                  widget.summarySecondary.isNotEmpty)
                 Container(
                   margin: const EdgeInsets.only(top: 4),
                   padding: const EdgeInsets.all(6),
@@ -5302,17 +5505,17 @@ class _DisplayCard extends StatelessWidget {
                     children: [
                       Expanded(
                         child: Text(
-                          summaryPrimary,
+                          widget.summaryPrimary,
                           style: const TextStyle(
                             fontSize: 11,
                             fontWeight: FontWeight.bold,
                           ),
                         ),
                       ),
-                      if (summarySecondary.isNotEmpty)
+                      if (widget.summarySecondary.isNotEmpty)
                         Expanded(
                           child: Text(
-                            summarySecondary,
+                            widget.summarySecondary,
                             textAlign: TextAlign.end,
                             style: const TextStyle(
                               fontSize: 11,
@@ -5441,7 +5644,7 @@ class _LoadingDisplayCard extends StatelessWidget {
   }
 }
 
-class _LoadingSection extends StatelessWidget {
+class _LoadingSection extends StatefulWidget {
   const _LoadingSection({
     required this.title,
     required this.rows,
@@ -5469,27 +5672,57 @@ class _LoadingSection extends StatelessWidget {
   final ValueChanged<int>? onRemarkLongPress;
 
   @override
+  State<_LoadingSection> createState() => _LoadingSectionState();
+}
+
+class _LoadingSectionState extends State<_LoadingSection> {
+  final ScrollController _scrollController = ScrollController();
+
+  @override
+  void didUpdateWidget(covariant _LoadingSection oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _scrollToCurrentInputRow();
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  void _scrollToCurrentInputRow() {
+    if (widget.editingRowIndex != null || widget.currentRow == null) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_scrollController.hasClients) return;
+      _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final hasEditingRow = rows.any((item) => item.index == editingRowIndex);
+    final hasEditingRow = widget.rows.any(
+      (item) => item.index == widget.editingRowIndex,
+    );
     final displayRows = [
-      for (final item in rows)
+      for (final item in widget.rows)
         _IndexedLoadingRow(
           item.index,
-          item.index == editingRowIndex && currentRow != null
-              ? currentRow!
+          item.index == widget.editingRowIndex && widget.currentRow != null
+              ? widget.currentRow!
               : item.row,
         ),
-      if (currentRow != null && !hasEditingRow)
-        _IndexedLoadingRow(-1, currentRow!),
+      if (widget.currentRow != null && !hasEditingRow)
+        _IndexedLoadingRow(-1, widget.currentRow!),
     ];
+    _scrollToCurrentInputRow();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        if (title != null)
+        if (widget.title != null)
           Padding(
             padding: const EdgeInsets.only(left: 4, bottom: 3),
             child: Text(
-              title!,
+              widget.title!,
               style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
             ),
           ),
@@ -5498,11 +5731,11 @@ class _LoadingSection extends StatelessWidget {
             builder: (context, constraints) {
               final tableWidth = _tableWidthFor(
                 constraints.maxWidth,
-                columns.length,
+                widget.columns.length,
               );
               final dataColumnWidth = _tableDataColumnWidth(
                 tableWidth,
-                columns.length,
+                widget.columns.length,
               );
               return SizedBox(
                 width: tableWidth,
@@ -5511,24 +5744,25 @@ class _LoadingSection extends StatelessWidget {
                     _TableLine(
                       rowNumber: null,
                       showIndexColumn: true,
-                      columns: columns,
+                      columns: widget.columns,
                       row: null,
-                      currentKey: currentKey,
+                      currentKey: widget.currentKey,
                       selectedRow: false,
                       dataColumnWidth: dataColumnWidth,
                       onDelete: null,
-                      onSelectField: (key) => onHeaderSelect?.call(key),
-                      headerSelectable: onHeaderSelect != null,
+                      onSelectField: (key) => widget.onHeaderSelect?.call(key),
+                      headerSelectable: widget.onHeaderSelect != null,
                     ),
                     Expanded(
                       child: ListView.builder(
+                        controller: _scrollController,
                         itemCount: displayRows.isEmpty ? 1 : displayRows.length,
                         itemBuilder: (context, index) {
                           if (displayRows.isEmpty) {
                             return _TableLine(
                               rowNumber: 1,
                               showIndexColumn: true,
-                              columns: columns,
+                              columns: widget.columns,
                               row: const {},
                               currentKey: '',
                               selectedRow: false,
@@ -5539,27 +5773,28 @@ class _LoadingSection extends StatelessWidget {
                           }
                           final item = displayRows[index];
                           final selectedRow =
-                              item.index == editingRowIndex || item.index < 0;
+                              item.index == widget.editingRowIndex ||
+                              item.index < 0;
                           return _TableLine(
                             rowNumber: index + 1,
                             showIndexColumn: true,
-                            columns: columns,
-                            row: hideWeight
+                            columns: widget.columns,
+                            row: widget.hideWeight
                                 ? {...item.row, 'weight': ''}
                                 : item.row,
-                            currentKey: selectedRow ? currentKey : '',
+                            currentKey: selectedRow ? widget.currentKey : '',
                             selectedRow: selectedRow,
                             dataColumnWidth: dataColumnWidth,
                             onDelete: item.index >= 0
-                                ? () => onDelete(item.index)
+                                ? () => widget.onDelete(item.index)
                                 : null,
-                            onSelectField: (key) => onSelectField(
+                            onSelectField: (key) => widget.onSelectField(
                               item.index >= 0 ? item.index : null,
                               key,
                             ),
                             onLongPressField: (key) {
                               if (key == 'remark' && item.index >= 0) {
-                                onRemarkLongPress?.call(item.index);
+                                widget.onRemarkLongPress?.call(item.index);
                               }
                             },
                           );
@@ -5777,6 +6012,105 @@ class _StandardKeyboard extends StatelessWidget {
   }
 }
 
+class _FastVoiceHoldDialogBody extends StatefulWidget {
+  const _FastVoiceHoldDialogBody();
+
+  @override
+  State<_FastVoiceHoldDialogBody> createState() =>
+      _FastVoiceHoldDialogBodyState();
+}
+
+class _FastVoiceHoldDialogBodyState extends State<_FastVoiceHoldDialogBody>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 520),
+    )..repeat(reverse: true);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const Text(
+          '请按住说出尺寸，例如 200乘300、400乘1米1、50乘80厘米',
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            color: AppColors.textSecondary,
+            fontSize: 14,
+            height: 1.45,
+          ),
+        ),
+        const SizedBox(height: 18),
+        AnimatedBuilder(
+          animation: _controller,
+          builder: (context, child) {
+            return Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                _FastVoiceWaveBar(height: 18, progress: _waveProgress(0)),
+                const SizedBox(width: 8),
+                _FastVoiceWaveBar(height: 28, progress: _waveProgress(1)),
+                const SizedBox(width: 8),
+                _FastVoiceWaveBar(height: 22, progress: _waveProgress(2)),
+              ],
+            );
+          },
+        ),
+        const SizedBox(height: 14),
+        const Text(
+          '请持续按住并清晰说出尺寸',
+          style: TextStyle(color: AppColors.primary, fontWeight: FontWeight.bold),
+        ),
+      ],
+    );
+  }
+
+  double _waveProgress(int index) {
+    final shifted = (_controller.value + index * 0.23) % 1.0;
+    return shifted <= 0.5 ? shifted * 2 : (1 - shifted) * 2;
+  }
+}
+
+class _FastVoiceWaveBar extends StatelessWidget {
+  const _FastVoiceWaveBar({required this.height, required this.progress});
+
+  final double height;
+  final double progress;
+
+  @override
+  Widget build(BuildContext context) {
+    return Transform.scale(
+      scaleY: 0.7 + progress * 0.55,
+      alignment: Alignment.bottomCenter,
+      child: Opacity(
+        opacity: 0.45 + progress * 0.55,
+        child: Container(
+          width: 8,
+          height: height,
+          decoration: BoxDecoration(
+            color: AppColors.primary,
+            borderRadius: BorderRadius.circular(99),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _FastKeyboard extends StatelessWidget {
   const _FastKeyboard({
     required this.onToken,
@@ -5784,7 +6118,6 @@ class _FastKeyboard extends StatelessWidget {
     required this.onNewColumn,
     required this.onNewLine,
     required this.voicePressed,
-    required this.onVoiceTap,
     required this.onVoiceStart,
     required this.onVoiceEnd,
     required this.onVoiceCancel,
@@ -5794,7 +6127,6 @@ class _FastKeyboard extends StatelessWidget {
   final VoidCallback onNewColumn;
   final VoidCallback onNewLine;
   final bool voicePressed;
-  final VoidCallback onVoiceTap;
   final VoidCallback onVoiceStart;
   final VoidCallback onVoiceEnd;
   final VoidCallback onVoiceCancel;
@@ -5876,7 +6208,6 @@ class _FastKeyboard extends StatelessWidget {
                 Expanded(
                   child: _FastVoiceButton(
                     pressed: voicePressed,
-                    onTap: onVoiceTap,
                     onHoldStart: onVoiceStart,
                     onHoldEnd: onVoiceEnd,
                     onHoldCancel: onVoiceCancel,
@@ -5894,55 +6225,159 @@ class _FastKeyboard extends StatelessWidget {
 class _FastVoiceButton extends StatelessWidget {
   const _FastVoiceButton({
     required this.pressed,
-    required this.onTap,
     required this.onHoldStart,
     required this.onHoldEnd,
     required this.onHoldCancel,
   });
 
   final bool pressed;
-  final VoidCallback onTap;
   final VoidCallback onHoldStart;
   final VoidCallback onHoldEnd;
   final VoidCallback onHoldCancel;
 
   @override
   Widget build(BuildContext context) {
-    final scale = pressed ? 0.92 : 1.0;
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: onTap,
-      onLongPressStart: (_) => onHoldStart(),
-      onLongPressEnd: (_) => onHoldEnd(),
-      onLongPressCancel: onHoldCancel,
-      child: AnimatedScale(
-        scale: scale,
-        duration: const Duration(milliseconds: 110),
-        child: Container(
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            gradient: const RadialGradient(
-              colors: [Color(0xFF8B5CF6), Color(0xFF6F4CC3), Color(0xFF4F2E93)],
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: const Color(
-                  0xFF7E57C2,
-                ).withValues(alpha: pressed ? 0.38 : 0.24),
-                blurRadius: pressed ? 18 : 12,
-                spreadRadius: pressed ? 4 : 2,
-              ),
-            ],
-            border: Border.all(
-              color: Colors.white.withValues(alpha: 0.55),
-              width: 1.2,
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        return Listener(
+          behavior: HitTestBehavior.opaque,
+          onPointerDown: (_) => onHoldStart(),
+          onPointerUp: (_) => onHoldEnd(),
+          onPointerCancel: (_) {},
+          child: AnimatedScale(
+            scale: pressed ? 0.92 : 1,
+            duration: const Duration(milliseconds: 110),
+            curve: Curves.easeOut,
+            child: CustomPaint(
+              painter: _FastVoiceButtonPainter(pressed: pressed),
+              child: const SizedBox.expand(),
             ),
           ),
-          child: Icon(Icons.mic, color: Colors.white, size: pressed ? 28 : 24),
-        ),
-      ),
+        );
+      },
     );
+  }
+}
+
+class _FastVoiceButtonPainter extends CustomPainter {
+  const _FastVoiceButtonPainter({required this.pressed});
+
+  final bool pressed;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = size.center(Offset.zero);
+    final shortest = size.shortestSide;
+    final outerRadius = shortest * (pressed ? 0.46 : 0.43);
+    final innerRadius = shortest * (pressed ? 0.36 : 0.34);
+    final outerRect = Rect.fromCircle(center: center, radius: outerRadius);
+    final innerRect = Rect.fromCircle(center: center, radius: innerRadius);
+
+    canvas.drawCircle(
+      center,
+      outerRadius,
+      Paint()
+        ..shader = RadialGradient(
+          colors: pressed
+              ? const [Color(0x3A8E79F5), Color(0x24725EFF)]
+              : const [Color(0x2C8B77F0), Color(0x1A6E5BFF)],
+        ).createShader(outerRect),
+    );
+    canvas.drawCircle(
+      center,
+      innerRadius,
+      Paint()
+        ..shader = const LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [Color(0xFFA58BFF), Color(0xFF8266F0), Color(0xFF5E40C9)],
+        ).createShader(innerRect),
+    );
+    canvas.drawCircle(
+      center,
+      innerRadius,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.2
+        ..color = Colors.white.withValues(alpha: pressed ? 0.30 : 0.25),
+    );
+
+    final highlightRect = Rect.fromCenter(
+      center: center.translate(0, -innerRadius * 0.42),
+      width: innerRadius * 1.55,
+      height: innerRadius * 0.72,
+    );
+    canvas.drawOval(
+      highlightRect,
+      Paint()
+        ..shader = LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [
+            Colors.white.withValues(alpha: pressed ? 0.40 : 0.34),
+            Colors.white.withValues(alpha: 0),
+          ],
+        ).createShader(highlightRect),
+    );
+
+    canvas.drawCircle(
+      center,
+      innerRadius,
+      Paint()
+        ..shader = LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [
+            Colors.transparent,
+            Colors.black.withValues(alpha: pressed ? 0.13 : 0.09),
+          ],
+        ).createShader(innerRect),
+    );
+    _paintMic(canvas, center, shortest * 0.28);
+  }
+
+  void _paintMic(Canvas canvas, Offset center, double iconSize) {
+    final paint = Paint()
+      ..color = Colors.white
+      ..style = PaintingStyle.fill
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+    final stroke = Paint()
+      ..color = Colors.white
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = iconSize * 0.09
+      ..strokeCap = StrokeCap.round;
+    final unit = iconSize / 24;
+    final micRect = Rect.fromCenter(
+      center: center.translate(0, -2 * unit),
+      width: 6 * unit,
+      height: 12 * unit,
+    );
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(micRect, Radius.circular(3 * unit)),
+      paint,
+    );
+    final arcRect = Rect.fromCenter(
+      center: center.translate(0, 1.5 * unit),
+      width: 14 * unit,
+      height: 14 * unit,
+    );
+    canvas.drawArc(arcRect, 0.12, 2.9, false, stroke);
+    canvas.drawLine(
+      center.translate(0, 8 * unit),
+      center.translate(0, 12 * unit),
+      stroke,
+    );
+    canvas.drawLine(
+      center.translate(-4 * unit, 12 * unit),
+      center.translate(4 * unit, 12 * unit),
+      stroke,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _FastVoiceButtonPainter oldDelegate) {
+    return oldDelegate.pressed != pressed;
   }
 }
 
