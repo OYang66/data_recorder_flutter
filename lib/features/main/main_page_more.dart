@@ -122,24 +122,53 @@ extension _MainPageMore on _MainPageState {
     );
   }
 
+  bool _isOfflineAccountText(String value) {
+    final text = value.trim().toLowerCase();
+    if (text.isEmpty) return false;
+    return text == '0' ||
+        text == 'false' ||
+        text == 'offline' ||
+        text.contains('离线') ||
+        text.contains('下线') ||
+        text.contains('失效') ||
+        text.contains('过期') ||
+        text.contains('重新登录');
+  }
+
   Future<bool> _isAccountOnline(String username) async {
-    if (username.trim().isEmpty || !await _preferences.isLoggedIn()) {
+    final account = username.trim();
+    if (account.isEmpty || !await _preferences.isLoggedIn()) {
       return false;
     }
     try {
       final response = await AuthRepository(
         preferences: _preferences,
-      ).checkAccountStatus(username.trim());
-      if (!response.isSuccess) return false;
-      final status = response.data;
-      if (status == null) return true;
-      final onlineStatus = status.onlineStatus?.trim().toLowerCase();
-      return status.valid && onlineStatus != '离线' && onlineStatus != 'offline';
-    } catch (error) {
-      if (error is DioException && error.response?.statusCode == 401) {
+      ).checkAccountStatus(account);
+      if (!response.isSuccess) {
         return false;
       }
-      return true;
+      final status = response.data;
+      if (status == null || !status.valid) {
+        return false;
+      }
+      final statusText = [
+        status.onlineStatus ?? '',
+        status.message ?? '',
+        response.displayMessage,
+      ].join(' ');
+      return !_isOfflineAccountText(statusText);
+    } catch (error) {
+      if (error is DioException) {
+        final errorText = [
+          error.response?.data?.toString() ?? '',
+          error.message ?? '',
+        ].join(' ');
+        if (error.response?.statusCode == 401 ||
+            _isOfflineAccountText(errorText)) {
+          return false;
+        }
+      }
+      return false;
     }
   }
 

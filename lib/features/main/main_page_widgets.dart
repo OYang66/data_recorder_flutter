@@ -680,19 +680,23 @@ class _DisplayCard extends StatefulWidget {
 class _DisplayCardState extends State<_DisplayCard> {
   final ScrollController _scrollController = ScrollController();
   bool _scrollScheduled = false;
+  late String _inputSignature;
 
   @override
   void initState() {
     super.initState();
+    _inputSignature = _currentInputSignature();
     _scrollToCurrentInputRow();
   }
 
   @override
   void didUpdateWidget(covariant _DisplayCard oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (widget.editingRowIndex == null &&
-        (widget.rows.length > oldWidget.rows.length ||
-            oldWidget.editingRowIndex != null)) {
+    final signature = _currentInputSignature();
+    if (signature != _inputSignature ||
+        widget.rows.length > oldWidget.rows.length ||
+        widget.editingRowIndex != oldWidget.editingRowIndex) {
+      _inputSignature = signature;
       _scrollToCurrentInputRow();
     }
   }
@@ -710,15 +714,25 @@ class _DisplayCardState extends State<_DisplayCard> {
         : null;
   }
 
+  String _currentInputSignature() {
+    final entries = widget.currentRow.entries.toList()
+      ..sort((left, right) => left.key.compareTo(right.key));
+    return '${widget.currentKey}|${widget.editingRowIndex}|${entries.map((entry) => '${entry.key}=${entry.value}').join('|')}';
+  }
+
   void _scrollToCurrentInputRow() {
-    if (_scrollScheduled || widget.editingRowIndex != null) return;
+    if (_scrollScheduled) return;
     _scrollScheduled = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _scrollScheduled = false;
       if (!mounted || !_scrollController.hasClients) return;
       final maxScrollExtent = _scrollController.position.maxScrollExtent;
-      if ((maxScrollExtent - _scrollController.offset).abs() < 1) return;
-      _scrollController.jumpTo(maxScrollExtent);
+      final editingIndex = _editingIndex();
+      final targetOffset = editingIndex == null
+          ? maxScrollExtent
+          : (editingIndex * 34.0).clamp(0.0, maxScrollExtent);
+      if ((targetOffset - _scrollController.offset).abs() < 1) return;
+      _scrollController.jumpTo(targetOffset);
     });
   }
 
@@ -1029,12 +1043,25 @@ class _LoadingSection extends StatefulWidget {
 
 class _LoadingSectionState extends State<_LoadingSection> {
   final ScrollController _scrollController = ScrollController();
+  bool _scrollScheduled = false;
+  late String _inputSignature;
+
+  @override
+  void initState() {
+    super.initState();
+    _inputSignature = _currentInputSignature();
+    _scrollToInputRow();
+  }
 
   @override
   void didUpdateWidget(covariant _LoadingSection oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (widget.rows.length > oldWidget.rows.length) {
-      _scrollToLatestRow();
+    final signature = _currentInputSignature();
+    if (signature != _inputSignature ||
+        widget.rows.length > oldWidget.rows.length ||
+        widget.editingRowIndex != oldWidget.editingRowIndex) {
+      _inputSignature = signature;
+      _scrollToInputRow();
     }
   }
 
@@ -1044,10 +1071,22 @@ class _LoadingSectionState extends State<_LoadingSection> {
     super.dispose();
   }
 
-  void _scrollToLatestRow() {
+  String _currentInputSignature() {
+    final row = widget.currentRow ?? const <String, String>{};
+    final entries = row.entries.toList()
+      ..sort((left, right) => left.key.compareTo(right.key));
+    return '${widget.currentKey}|${widget.editingRowIndex}|${entries.map((entry) => '${entry.key}=${entry.value}').join('|')}';
+  }
+
+  void _scrollToInputRow() {
+    if (_scrollScheduled) return;
+    _scrollScheduled = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      _scrollScheduled = false;
       if (!mounted || !_scrollController.hasClients) return;
-      _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
+      final maxScrollExtent = _scrollController.position.maxScrollExtent;
+      if ((maxScrollExtent - _scrollController.offset).abs() < 1) return;
+      _scrollController.jumpTo(maxScrollExtent);
     });
   }
 
