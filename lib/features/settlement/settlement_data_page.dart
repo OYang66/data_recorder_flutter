@@ -1,10 +1,13 @@
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/constants/app_colors.dart';
+import '../../core/storage/preferences.dart';
 import '../../core/widgets/app_dialog_chrome.dart';
 import '../../data/models/api/server_models.dart';
+import '../../data/repositories/auth_repository.dart';
 import '../../data/repositories/server_repository.dart';
 
 class SettlementDataPage extends StatefulWidget {
@@ -19,7 +22,9 @@ class _SettlementDataPageState extends State<SettlementDataPage> {
     'com.example.datarecorder/export_share',
   );
 
-  final _repository = ServerRepository();
+  final _preferences = AppPreferences();
+  late final _repository = ServerRepository(preferences: _preferences);
+  late final _authRepository = AuthRepository(preferences: _preferences);
   final _projectController = TextEditingController();
   final List<SettlementTypeOption> _typeOptions = [];
   final List<String> _projectNames = [];
@@ -73,8 +78,50 @@ class _SettlementDataPageState extends State<SettlementDataPage> {
     } catch (error) {
       if (!mounted) return;
       setState(() => _loading = false);
-      _showMessage('数据类型加载失败，请检查网络和登录状态');
+      _showMessage(
+        _isOfflineError(error) ? '当前账号已离线，请重新登录' : '数据类型加载失败，请检查网络和登录状态',
+      );
     }
+  }
+
+  Future<bool> _ensureAccountOnline() async {
+    final username = await _preferences.getUsername();
+    if (username.trim().isEmpty || !await _preferences.isLoggedIn()) {
+      _showMessage('当前账号已离线，请重新登录');
+      return false;
+    }
+    try {
+      final response = await _authRepository.checkAccountStatus(
+        username.trim(),
+      );
+      final status = response.data;
+      final onlineStatus = status?.onlineStatus?.trim().toLowerCase();
+      final online =
+          response.isSuccess &&
+          (status == null || status.valid) &&
+          onlineStatus != '离线' &&
+          onlineStatus != 'offline';
+      if (!online) {
+        _showMessage('当前账号已离线，请重新登录');
+      }
+      return online;
+    } catch (error) {
+      if (_isOfflineError(error)) {
+        _showMessage('当前账号已离线，请重新登录');
+        return false;
+      }
+      return true;
+    }
+  }
+
+  bool _isOfflineError(Object error) {
+    return error is DioException && error.response?.statusCode == 401;
+  }
+
+  bool _isOfflineMessage(String message) {
+    return message.contains('离线') ||
+        message.contains('登录') ||
+        message.contains('失效');
   }
 
   Future<bool> _loadProjectNames({
@@ -84,9 +131,29 @@ class _SettlementDataPageState extends State<SettlementDataPage> {
     if (showPageLoading) {
       setState(() => _loading = true);
     }
+    final online = await _ensureAccountOnline();
+    if (!mounted) return false;
+    if (!online) {
+      if (showPageLoading) {
+        setState(() => _loading = false);
+      }
+      return false;
+    }
     try {
       final response = await _repository.getSettlementProjectNames(_dataType);
       if (!mounted) return false;
+      if (!response.isSuccess) {
+        final message = response.displayMessage;
+        if (showPageLoading) {
+          setState(() => _loading = false);
+        }
+        _showMessage(
+          _isOfflineMessage(message)
+              ? '当前账号已离线，请重新登录'
+              : message.ifEmpty('项目列表加载失败，请检查网络和登录状态'),
+        );
+        return false;
+      }
       setState(() {
         _projectNames
           ..clear()
@@ -105,7 +172,9 @@ class _SettlementDataPageState extends State<SettlementDataPage> {
       if (showPageLoading) {
         setState(() => _loading = false);
       }
-      _showMessage('项目列表加载失败，请检查网络和登录状态');
+      _showMessage(
+        _isOfflineError(error) ? '当前账号已离线，请重新登录' : '项目列表加载失败，请检查网络和登录状态',
+      );
       return false;
     }
   }
@@ -134,8 +203,11 @@ class _SettlementDataPageState extends State<SettlementDataPage> {
   }
 
   Future<void> _chooseProject() async {
-    await _loadProjectNames(showPageLoading: false, clearResults: false);
-    if (!mounted) return;
+    final loaded = await _loadProjectNames(
+      showPageLoading: false,
+      clearResults: false,
+    );
+    if (!mounted || !loaded) return;
     if (_projectNames.isEmpty) {
       _showMessage('暂无服务器项目');
       return;
@@ -168,7 +240,12 @@ class _SettlementDataPageState extends State<SettlementDataPage> {
         );
         if (!mounted) return;
         if (!response.isSuccess) {
-          _showMessage(response.displayMessage.ifEmpty('查询失败'));
+          final message = response.displayMessage;
+          _showMessage(
+            _isOfflineMessage(message)
+                ? '当前账号已离线，请重新登录'
+                : message.ifEmpty('查询失败'),
+          );
           setState(() => _loading = false);
           return;
         }
@@ -199,10 +276,13 @@ class _SettlementDataPageState extends State<SettlementDataPage> {
         );
         if (!mounted) return;
         if (!columnsResponse.isSuccess || !rowsResponse.isSuccess) {
+          final message = rowsResponse.displayMessage.ifEmpty(
+            columnsResponse.displayMessage,
+          );
           _showMessage(
-            rowsResponse.displayMessage.ifEmpty(
-              columnsResponse.displayMessage.ifEmpty('查询失败'),
-            ),
+            _isOfflineMessage(message)
+                ? '当前账号已离线，请重新登录'
+                : message.ifEmpty('查询失败'),
           );
           setState(() => _loading = false);
           return;
@@ -238,7 +318,9 @@ class _SettlementDataPageState extends State<SettlementDataPage> {
     } catch (error) {
       if (!mounted) return;
       setState(() => _loading = false);
-      _showMessage('查询失败，请检查网络和登录状态');
+      _showMessage(
+        _isOfflineError(error) ? '当前账号已离线，请重新登录' : '查询失败，请检查网络和登录状态',
+      );
     }
   }
 
@@ -270,8 +352,12 @@ class _SettlementDataPageState extends State<SettlementDataPage> {
       if (mounted) _showMessage('当前版本不支持系统分享，请更新应用');
     } on PlatformException catch (error) {
       if (mounted) _showMessage(error.message ?? '系统分享失败，请稍后重试');
-    } catch (_) {
-      if (mounted) _showMessage('导出失败，请检查网络和登录状态');
+    } catch (error) {
+      if (mounted) {
+        _showMessage(
+          _isOfflineError(error) ? '当前账号已离线，请重新登录' : '导出失败，请检查网络和登录状态',
+        );
+      }
     }
   }
 

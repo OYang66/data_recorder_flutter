@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'legacy_android_bridge.dart';
 
@@ -18,6 +19,12 @@ class AppPreferences {
   static const _tripNameKey = 'flutter_trip_name';
   static const _qualityFloorKey = 'flutter_quality_floor';
   static const _subDisplayCodeKey = 'flutter_sub_display_code';
+  static const _draftProjectIdKey = 'flutter_draft_project_id';
+  static const _draftModeKey = 'flutter_draft_mode';
+  static const _draftBuildingKey = 'flutter_draft_building';
+  static const _draftScopeKey = 'flutter_draft_scope';
+  static const _draftFieldKey = 'flutter_draft_field';
+  static const _draftRowKey = 'flutter_draft_row';
   static const _lastProjectIdKey = 'last_project_id';
   static const _noticeShownPrefix = 'notice_shown_';
   static const _sessionPrefs = 'user_session';
@@ -186,6 +193,59 @@ class AppPreferences {
     };
     _values.addAll(values);
     await _bridge.writePreferences(_sessionPrefs, values);
+  }
+
+  Future<Map<String, String>> getCurrentDraftState() async {
+    await migrateLegacyPreferences();
+    return {
+      _draftProjectIdKey: _values[_draftProjectIdKey]?.toString() ?? '',
+      _draftModeKey: _values[_draftModeKey]?.toString() ?? '',
+      _draftBuildingKey: _values[_draftBuildingKey]?.toString() ?? '',
+      _draftScopeKey: _values[_draftScopeKey]?.toString() ?? '',
+      _draftFieldKey: _values[_draftFieldKey]?.toString() ?? '',
+      _draftRowKey: _values[_draftRowKey]?.toString() ?? '',
+    };
+  }
+
+  Future<void> saveCurrentDraftState({
+    required int projectId,
+    required String mode,
+    required String buildingName,
+    required String scopeName,
+    required String fieldName,
+    required Map<String, String> row,
+  }) async {
+    final values = {
+      _draftProjectIdKey: projectId,
+      _draftModeKey: mode,
+      _draftBuildingKey: buildingName,
+      _draftScopeKey: scopeName,
+      _draftFieldKey: fieldName,
+      _draftRowKey: jsonEncode(row),
+    };
+    _values.addAll(values);
+    await _bridge.writePreferences(_sessionPrefs, values);
+  }
+
+  Future<void> clearCurrentDraftState() async {
+    for (final key in [
+      _draftProjectIdKey,
+      _draftModeKey,
+      _draftBuildingKey,
+      _draftScopeKey,
+      _draftFieldKey,
+      _draftRowKey,
+    ]) {
+      _values.remove(key);
+    }
+    await _bridge.removePreferences(_sessionPrefs, [
+      _draftProjectIdKey,
+      _draftModeKey,
+      _draftBuildingKey,
+      _draftScopeKey,
+      _draftFieldKey,
+      _draftRowKey,
+    ]);
   }
 
   Future<int> getLastProjectId() async {

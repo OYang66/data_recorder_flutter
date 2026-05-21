@@ -1,13 +1,22 @@
+import 'dart:convert';
+
 import '../../data/models/project_entity.dart';
+import 'legacy_android_bridge.dart';
 import 'legacy_database_bridge.dart';
 
 class LocalDatabase {
-  LocalDatabase._({LegacyDatabaseBridge bridge = const LegacyDatabaseBridge()})
-    : _bridge = bridge;
+  LocalDatabase._({
+    LegacyDatabaseBridge bridge = const LegacyDatabaseBridge(),
+    LegacyAndroidBridge preferencesBridge = const LegacyAndroidBridge(),
+  }) : _bridge = bridge,
+       _preferencesBridge = preferencesBridge;
 
+  static const _fallbackPrefs = 'flutter_local_database';
+  static const _projectsKey = 'projects_json';
   static final instance = LocalDatabase._();
 
   final LegacyDatabaseBridge _bridge;
+  final LegacyAndroidBridge _preferencesBridge;
   final List<ProjectEntity> _projects = [];
   int _nextId = 1;
   bool _loadedLegacyProjects = false;
@@ -17,16 +26,48 @@ class LocalDatabase {
       return;
     }
     _loadedLegacyProjects = true;
-    final projects = await _bridge.getAllProjects();
-    if (projects.isNotEmpty) {
-      _projects
-        ..clear()
-        ..addAll(projects);
-      final maxId = projects
-          .map((project) => project.id ?? 0)
-          .fold<int>(0, (max, id) => id > max ? id : max);
-      _nextId = maxId + 1;
+    final nativeProjects = await _bridge.getAllProjects();
+    final projects = nativeProjects.isNotEmpty
+        ? nativeProjects
+        : await _loadFallbackProjects();
+    if (projects.isEmpty) return;
+    _projects
+      ..clear()
+      ..addAll(projects);
+    _refreshNextId();
+  }
+
+  Future<List<ProjectEntity>> _loadFallbackProjects() async {
+    final values = await _preferencesBridge.readPreferences(_fallbackPrefs);
+    final content = values[_projectsKey]?.toString() ?? '';
+    if (content.isEmpty) return const [];
+    try {
+      final decoded = jsonDecode(content);
+      if (decoded is! List) return const [];
+      return decoded.whereType<Map>().map((item) {
+        final map = item.map<String, Object?>(
+          (key, value) => MapEntry(key.toString(), value),
+        );
+        return ProjectEntity.fromMap(map);
+      }).toList();
+    } catch (_) {
+      return const [];
     }
+  }
+
+  Future<void> _syncFallbackProjects() async {
+    await _preferencesBridge.writePreferences(_fallbackPrefs, {
+      _projectsKey: jsonEncode(
+        _projects.map((project) => project.toMap()).toList(),
+      ),
+    });
+  }
+
+  void _refreshNextId() {
+    final maxId = _projects
+        .map((project) => project.id ?? 0)
+        .fold<int>(0, (max, id) => id > max ? id : max);
+    _nextId = maxId + 1;
   }
 
   Future<int> insert(ProjectEntity project) async {
@@ -44,6 +85,7 @@ class LocalDatabase {
         qualityContent: project.qualityContent,
       ),
     );
+    await _syncFallbackProjects();
     return id;
   }
 
@@ -57,6 +99,7 @@ class LocalDatabase {
     final index = _projects.indexWhere((item) => item.id == id);
     if (index >= 0) {
       _projects[index] = project;
+      await _syncFallbackProjects();
     }
   }
 
@@ -64,6 +107,7 @@ class LocalDatabase {
     await _loadLegacyProjects();
     await _bridge.delete(project);
     _projects.removeWhere((item) => item.id == project.id);
+    await _syncFallbackProjects();
   }
 
   Future<List<ProjectEntity>> getAllProjects() async {

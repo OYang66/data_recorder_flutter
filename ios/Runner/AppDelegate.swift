@@ -9,8 +9,12 @@ import UIKit
   private var updateChannel: FlutterMethodChannel?
   private var fastVoiceChannel: FlutterMethodChannel?
   private var exportShareChannel: FlutterMethodChannel?
+  private var qualityPhotoChannel: FlutterMethodChannel?
   private var deliveryOrderIntakeChannel: FlutterMethodChannel?
   private var pendingDocumentPickerResult: FlutterResult?
+  private var pendingExportPickerResult: FlutterResult?
+  private var pendingQualityPhotoResult: FlutterResult?
+  private var pendingExportedFileNames: [String] = []
   private var pendingDeliveryOrderFile: [String: Any]?
   private let fastSpeechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: "zh-CN"))
   private let fastAudioEngine = AVAudioEngine()
@@ -44,6 +48,7 @@ import UIKit
     registerUpdateChannel(messenger: messenger)
     registerFastVoiceChannel(messenger: messenger)
     registerExportShareChannel(messenger: messenger)
+    registerQualityPhotoChannel(messenger: messenger)
     registerDeliveryOrderIntakeChannel(messenger: messenger)
   }
 
@@ -140,6 +145,8 @@ import UIKit
         } catch {
           result(FlutterError(code: "save_failed", message: error.localizedDescription, details: nil))
         }
+      case "exportBytesFiles":
+        self.exportBytesFiles(call: call, result: result)
       case "saveHistory":
         guard let arguments = call.arguments as? [String: Any] else {
           result(FlutterError(code: "invalid_arguments", message: "历史备份参数无效", details: nil))
@@ -198,6 +205,24 @@ import UIKit
     if let bytes = arguments[key] as? [UInt8] {
       return Data(bytes)
     }
+    if let values = arguments[key] as? [Any] {
+      let bytes = values.compactMap { value -> UInt8? in
+        if let byte = value as? UInt8 {
+          return byte
+        }
+        if let number = value as? NSNumber {
+          let intValue = number.intValue
+          return (0...255).contains(intValue) ? UInt8(intValue) : nil
+        }
+        if let intValue = value as? Int {
+          return (0...255).contains(intValue) ? UInt8(intValue) : nil
+        }
+        return nil
+      }
+      if bytes.count == values.count {
+        return Data(bytes)
+      }
+    }
     throw NSError(domain: "DataRecorder", code: 1, userInfo: [NSLocalizedDescriptionKey: "文件内容为空或格式无效"])
   }
 
@@ -234,8 +259,55 @@ import UIKit
     }
   }
 
+  private func exportBytesFiles(call: FlutterMethodCall, result: @escaping FlutterResult) {
+    if pendingDocumentPickerResult != nil || pendingExportPickerResult != nil {
+      result([[String: Any]]())
+      return
+    }
+    guard let arguments = call.arguments as? [String: Any],
+          let rawFiles = arguments["files"] as? [[String: Any]] else {
+      result([[String: Any]]())
+      return
+    }
+    do {
+      let exportItems = try rawFiles.compactMap { rawFile -> (name: String, url: URL)? in
+        let fileName = stringArgument(rawFile, "fileName", fallback: "")
+        if fileName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+          return nil
+        }
+        let data = try dataArgument(rawFile, "bytes")
+        let path = try saveFile(fileName: fileName, data: data)
+        return (safeFileName(fileName), URL(fileURLWithPath: path))
+      }
+      if exportItems.isEmpty {
+        result([[String: Any]]())
+        return
+      }
+      DispatchQueue.main.async {
+        guard let presenter = self.topViewController() else {
+          result(FlutterError(code: "picker_failed", message: "无法打开导出位置选择器", details: nil))
+          return
+        }
+        self.pendingExportPickerResult = result
+        self.pendingExportedFileNames = exportItems.map { $0.name }
+        let urls = exportItems.map { $0.url }
+        let picker: UIDocumentPickerViewController
+        if #available(iOS 14.0, *) {
+          picker = UIDocumentPickerViewController(forExporting: urls, asCopy: true)
+        } else {
+          picker = UIDocumentPickerViewController(urls: urls, in: .exportToService)
+        }
+        picker.delegate = self
+        picker.allowsMultipleSelection = true
+        presenter.present(picker, animated: true)
+      }
+    } catch {
+      result(FlutterError(code: "export_failed", message: error.localizedDescription, details: nil))
+    }
+  }
+
   private func pickDeliveryOrderFile(result: @escaping FlutterResult) {
-    if pendingDocumentPickerResult != nil {
+    if pendingDocumentPickerResult != nil || pendingExportPickerResult != nil {
       result("")
       return
     }
@@ -294,6 +366,107 @@ import UIKit
       }
     }
     let fileName = safeFileName(url.lastPathComponent.isEmpty ? "delivery_order_\(Int(Date().timeIntervalSince1970)).xlsx" : url.lastPathComponent)
+    let destination = FileManager.default.temporaryDirectory.appendingPathComponent(fileName)
+    if FileManager.default.fileExists(atPath: destination.path) {
+      try FileManager.default.removeItem(at: destination)
+    }
+    try FileManager.default.copyItem(at: url, to: destination)
+    return destination.path
+  }
+
+  private func registerQualityPhotoChannel(messenger: FlutterBinaryMessenger) {
+    qualityPhotoChannel = FlutterMethodChannel(
+      name: "com.example.datarecorder/quality_photo",
+      binaryMessenger: messenger
+    )
+    qualityPhotoChannel?.setMethodCallHandler { call, result in
+      switch call.method {
+      case "takePhoto":
+        self.takeQualityPhoto(result: result)
+      case "pickPhoto":
+        self.pickQualityPhoto(result: result)
+      default:
+        result(FlutterMethodNotImplemented)
+      }
+    }
+  }
+
+  private func takeQualityPhoto(result: @escaping FlutterResult) {
+    presentQualityImagePicker(sourceType: .camera, result: result)
+  }
+
+  private func pickQualityPhoto(result: @escaping FlutterResult) {
+    presentQualityImagePicker(sourceType: .photoLibrary, result: result)
+  }
+
+  private func presentQualityImagePicker(sourceType: UIImagePickerController.SourceType, result: @escaping FlutterResult) {
+    if pendingQualityPhotoResult != nil {
+      result("")
+      return
+    }
+    guard UIImagePickerController.isSourceTypeAvailable(sourceType) else {
+      result(FlutterError(code: "unavailable", message: sourceType == .camera ? "当前设备不支持拍照" : "当前设备不支持相册选择", details: nil))
+      return
+    }
+    DispatchQueue.main.async {
+      guard let presenter = self.topViewController() else {
+        result(FlutterError(code: "picker_failed", message: "无法打开图片选择器", details: nil))
+        return
+      }
+      self.pendingQualityPhotoResult = result
+      let picker = UIImagePickerController()
+      picker.sourceType = sourceType
+      picker.mediaTypes = ["public.image"]
+      picker.delegate = self
+      picker.allowsEditing = false
+      presenter.present(picker, animated: true)
+    }
+  }
+
+  fileprivate func finishQualityPhotoPicking(info: [UIImagePickerController.InfoKey: Any], picker: UIImagePickerController) {
+    let result = pendingQualityPhotoResult
+    pendingQualityPhotoResult = nil
+    picker.dismiss(animated: true) {
+      do {
+        if let image = info[.originalImage] as? UIImage {
+          result?(try self.saveQualityImage(image))
+          return
+        }
+        if let imageUrl = info[.imageURL] as? URL {
+          result?(try self.copyQualityImageUrl(imageUrl))
+          return
+        }
+        result?("")
+      } catch {
+        result?(FlutterError(code: "photo_failed", message: error.localizedDescription, details: nil))
+      }
+    }
+  }
+
+  fileprivate func cancelQualityPhotoPicking(picker: UIImagePickerController) {
+    let result = pendingQualityPhotoResult
+    pendingQualityPhotoResult = nil
+    picker.dismiss(animated: true) {
+      result?("")
+    }
+  }
+
+  private func saveQualityImage(_ image: UIImage) throws -> String {
+    guard let data = image.jpegData(compressionQuality: 0.92) else {
+      throw NSError(domain: "DataRecorder", code: 2, userInfo: [NSLocalizedDescriptionKey: "图片内容无效"])
+    }
+    return try saveFile(fileName: "quality_\(Int(Date().timeIntervalSince1970 * 1000)).jpg", data: data)
+  }
+
+  private func copyQualityImageUrl(_ url: URL) throws -> String {
+    let accessed = url.startAccessingSecurityScopedResource()
+    defer {
+      if accessed {
+        url.stopAccessingSecurityScopedResource()
+      }
+    }
+    let fallbackName = "quality_\(Int(Date().timeIntervalSince1970 * 1000)).jpg"
+    let fileName = safeFileName(url.lastPathComponent.isEmpty ? fallbackName : url.lastPathComponent)
     let destination = FileManager.default.temporaryDirectory.appendingPathComponent(fileName)
     if FileManager.default.fileExists(atPath: destination.path) {
       try FileManager.default.removeItem(at: destination)
@@ -638,8 +811,34 @@ import UIKit
   }
 }
 
+extension AppDelegate: UIImagePickerControllerDelegate, UINavigationControllerDelegate {
+  func imagePickerController(
+    _ picker: UIImagePickerController,
+    didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]
+  ) {
+    finishQualityPhotoPicking(info: info, picker: picker)
+  }
+
+  func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
+    cancelQualityPhotoPicking(picker: picker)
+  }
+}
+
 extension AppDelegate: UIDocumentPickerDelegate {
   func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+    if let exportResult = pendingExportPickerResult {
+      let names = pendingExportedFileNames
+      pendingExportPickerResult = nil
+      pendingExportedFileNames = []
+      exportResult(names.enumerated().map { index, name in
+        [
+          "fileName": name,
+          "uri": urls.indices.contains(index) ? urls[index].absoluteString : "",
+          "success": true
+        ]
+      })
+      return
+    }
     let result = pendingDocumentPickerResult
     pendingDocumentPickerResult = nil
     guard let url = urls.first else {
@@ -658,6 +857,12 @@ extension AppDelegate: UIDocumentPickerDelegate {
   }
 
   func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
+    if let exportResult = pendingExportPickerResult {
+      pendingExportPickerResult = nil
+      pendingExportedFileNames = []
+      exportResult([[String: Any]]())
+      return
+    }
     let result = pendingDocumentPickerResult
     pendingDocumentPickerResult = nil
     result?("")

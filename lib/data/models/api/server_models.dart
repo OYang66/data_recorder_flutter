@@ -15,11 +15,8 @@ class AppNoticeInfo {
   final String createTime;
   final String updateTime;
 
-  String get displayKey => [
-    noticeId?.toString() ?? '',
-    updateTime,
-    createTime,
-  ].join('|');
+  String get displayKey =>
+      [noticeId?.toString() ?? '', updateTime, createTime].join('|');
 
   factory AppNoticeInfo.fromJson(Object? value) {
     final json = value as Map<String, Object?>? ?? {};
@@ -40,10 +37,7 @@ class ServerPageResult<T> {
   final List<T> rows;
   final int total;
 
-  factory ServerPageResult.fromJson(
-    Object? value,
-    T Function(Object?) parse,
-  ) {
+  factory ServerPageResult.fromJson(Object? value, T Function(Object?) parse) {
     final json = value as Map<String, Object?>? ?? {};
     final rows = json['rows'];
     return ServerPageResult<T>(

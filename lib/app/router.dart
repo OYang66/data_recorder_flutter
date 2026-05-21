@@ -12,6 +12,7 @@ import '../features/welcome/welcome_page.dart';
 
 final appRouter = GoRouter(
   initialLocation: '/',
+  overridePlatformDefaultLocation: true,
   routes: [
     GoRoute(path: '/', builder: (context, state) => const SplashPage()),
     GoRoute(path: '/welcome', builder: (context, state) => const WelcomePage()),

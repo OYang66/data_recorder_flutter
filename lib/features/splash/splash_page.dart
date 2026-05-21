@@ -14,18 +14,17 @@ class SplashPage extends StatefulWidget {
 }
 
 class _SplashPageState extends State<SplashPage> {
-  Timer? _navigationTimer;
+  bool _navigationStarted = false;
 
   @override
   void initState() {
     super.initState();
-    _navigationTimer = Timer(const Duration(milliseconds: 800), _openNextPage);
-  }
-
-  @override
-  void dispose() {
-    _navigationTimer?.cancel();
-    super.dispose();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && !_navigationStarted) {
+        _navigationStarted = true;
+        unawaited(_openNextPage());
+      }
+    });
   }
 
   Future<void> _openNextPage() async {
@@ -51,7 +50,7 @@ class _SplashPageState extends State<SplashPage> {
     try {
       final response = await AuthRepository(
         preferences: preferences,
-      ).checkAccountStatus(username);
+      ).checkAccountStatus(username).timeout(const Duration(seconds: 3));
       if (!mounted) {
         return;
       }

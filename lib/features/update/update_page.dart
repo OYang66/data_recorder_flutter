@@ -46,7 +46,11 @@ class UpdatePage extends StatelessWidget {
                   ),
                   child: const Column(
                     children: [
-                      Icon(Icons.system_update, size: 76, color: AppColors.primary),
+                      Icon(
+                        Icons.system_update,
+                        size: 76,
+                        color: AppColors.primary,
+                      ),
                       SizedBox(height: 20),
                       Text(
                         '检查更新',

@@ -7,11 +7,13 @@ class ExternalDeliveryOrderFile {
     required this.path,
     required this.fileName,
     required this.source,
+    this.mimeType,
   });
 
   final String path;
   final String fileName;
   final String source;
+  final String? mimeType;
 
   static ExternalDeliveryOrderFile? fromMap(Object? value) {
     if (value is! Map) return null;
@@ -19,10 +21,12 @@ class ExternalDeliveryOrderFile {
     if (path.isEmpty) return null;
     final fileName = value['fileName']?.toString().trim() ?? '';
     final source = value['source']?.toString().trim() ?? '';
+    final mimeType = value['mimeType']?.toString().trim() ?? '';
     return ExternalDeliveryOrderFile(
       path: path,
       fileName: fileName.isEmpty ? path.split(RegExp(r'[\\/]')).last : fileName,
       source: source.isEmpty ? 'external' : source,
+      mimeType: mimeType.isEmpty ? null : mimeType,
     );
   }
 }
@@ -30,7 +34,8 @@ class ExternalDeliveryOrderFile {
 class DeliveryOrderIntakeService {
   DeliveryOrderIntakeService._();
 
-  static final DeliveryOrderIntakeService instance = DeliveryOrderIntakeService._();
+  static final DeliveryOrderIntakeService instance =
+      DeliveryOrderIntakeService._();
 
   static const _channel = MethodChannel(
     'com.example.datarecorder/delivery_order_intake',

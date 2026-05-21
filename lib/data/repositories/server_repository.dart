@@ -134,10 +134,8 @@ class ServerRepository {
     );
     return ApiResponse<ServerPageResult<DeliveryOrderFileItem>>.fromJson(
       response.data ?? {},
-      (value) => ServerPageResult.fromJson(
-        value,
-        DeliveryOrderFileItem.fromJson,
-      ),
+      (value) =>
+          ServerPageResult.fromJson(value, DeliveryOrderFileItem.fromJson),
     );
   }
 
@@ -168,10 +166,17 @@ class ServerRepository {
 
   Future<ApiResponse<Object?>> uploadDeliveryOrder({
     required String filePath,
+    String? fileName,
     bool calculateNetWeight = false,
   }) async {
+    final uploadFileName = fileName?.trim();
     final formData = FormData.fromMap({
-      'file': await MultipartFile.fromFile(filePath),
+      'file': await MultipartFile.fromFile(
+        filePath,
+        filename: uploadFileName == null || uploadFileName.isEmpty
+            ? null
+            : uploadFileName,
+      ),
     });
     final response = await _dio.post<Map<String, Object?>>(
       'app/deliveryOrder/upload',
@@ -202,7 +207,8 @@ class ServerRepository {
     );
   }
 
-  Future<ApiResponse<List<MissingMaterialItem>>> getDeliveryMissingMaterials() async {
+  Future<ApiResponse<List<MissingMaterialItem>>>
+  getDeliveryMissingMaterials() async {
     final response = await _dio.get<Map<String, Object?>>(
       'app/deliveryOrder/missingMaterials',
     );
@@ -212,7 +218,8 @@ class ServerRepository {
     );
   }
 
-  Future<ApiResponse<List<DeliveryMaterialNameItem>>> getDeliveryMaterialNames() async {
+  Future<ApiResponse<List<DeliveryMaterialNameItem>>>
+  getDeliveryMaterialNames() async {
     final response = await _dio.get<Map<String, Object?>>(
       'app/deliveryOrder/materialNames',
     );
@@ -239,7 +246,8 @@ class ServerRepository {
     return ApiResponse<Object?>.fromJson(response.data ?? {}, (value) => value);
   }
 
-  Future<ApiResponse<List<SettlementTypeOption>>> getSettlementTypeOptions() async {
+  Future<ApiResponse<List<SettlementTypeOption>>>
+  getSettlementTypeOptions() async {
     final response = await _dio.get<Map<String, Object?>>(
       'app/settlementData/typeOptions',
     );
@@ -249,7 +257,9 @@ class ServerRepository {
     );
   }
 
-  Future<ApiResponse<List<String>>> getSettlementProjectNames(String dataType) async {
+  Future<ApiResponse<List<String>>> getSettlementProjectNames(
+    String dataType,
+  ) async {
     final response = await _dio.get<Map<String, Object?>>(
       'app/settlementData/projectNames',
       queryParameters: {'dataType': dataType},
@@ -288,9 +298,8 @@ class ServerRepository {
     );
   }
 
-  Future<ApiResponse<List<Map<String, Object?>>>> getSettlementMaterialSummaryRows(
-    String projectName,
-  ) async {
+  Future<ApiResponse<List<Map<String, Object?>>>>
+  getSettlementMaterialSummaryRows(String projectName) async {
     final response = await _dio.get<Map<String, Object?>>(
       'app/settlementData/materialSummary/list',
       queryParameters: {'projectName': projectName},
@@ -301,7 +310,9 @@ class ServerRepository {
     );
   }
 
-  Future<Response<List<int>>> exportSettlementDeliveryOrder(String projectName) {
+  Future<Response<List<int>>> exportSettlementDeliveryOrder(
+    String projectName,
+  ) {
     return _dio.post<List<int>>(
       'app/settlementData/deliveryOrder/export',
       queryParameters: {'projectName': projectName},
@@ -309,7 +320,9 @@ class ServerRepository {
     );
   }
 
-  Future<Response<List<int>>> exportSettlementMaterialSummary(String projectName) {
+  Future<Response<List<int>>> exportSettlementMaterialSummary(
+    String projectName,
+  ) {
     return _dio.post<List<int>>(
       'app/settlementData/materialSummary/export',
       queryParameters: {'projectName': projectName},

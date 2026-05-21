@@ -108,7 +108,11 @@ Future<T?> showAppCardDialog<T>({
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(99),
                   gradient: const LinearGradient(
-                    colors: [AppColors.primary, Color(0xFFA98CF7), Colors.transparent],
+                    colors: [
+                      AppColors.primary,
+                      Color(0xFFA98CF7),
+                      Colors.transparent,
+                    ],
                   ),
                 ),
               ),
@@ -167,7 +171,9 @@ class AppDialogActionButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final foreground = primary ? Colors.white : (danger ? AppColors.danger : AppColors.primary);
+    final foreground = primary
+        ? Colors.white
+        : (danger ? AppColors.danger : AppColors.primary);
     return SizedBox(
       height: 42,
       child: DecoratedBox(
@@ -191,9 +197,14 @@ class AppDialogActionButton extends StatelessWidget {
           onPressed: onPressed,
           style: TextButton.styleFrom(
             foregroundColor: foreground,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+            ),
           ),
-          child: Text(text, style: const TextStyle(fontWeight: FontWeight.bold)),
+          child: Text(
+            text,
+            style: const TextStyle(fontWeight: FontWeight.bold),
+          ),
         ),
       ),
     );
@@ -267,7 +278,9 @@ class AppDialogListItem extends StatelessWidget {
         : (selected || accent ? AppColors.primary : AppColors.textPrimary);
     final fill = danger
         ? const Color(0xFFFFF4F4)
-        : (selected ? const Color(0xFFF1EAFF) : (accent ? const Color(0xFFFAF7FF) : Colors.white));
+        : (selected
+              ? const Color(0xFFF1EAFF)
+              : (accent ? const Color(0xFFFAF7FF) : Colors.white));
     final stroke = danger
         ? const Color(0xFFF1B8B8)
         : (selected ? const Color(0xFFBBA7F2) : const Color(0xFFE7EAF3));
@@ -334,10 +347,7 @@ class AppDialogListItem extends StatelessWidget {
                   ),
                 ),
               ),
-            if (trailing != null) ...[
-              const SizedBox(width: 8),
-              trailing!,
-            ],
+            if (trailing != null) ...[const SizedBox(width: 8), trailing!],
           ],
         ),
       ),

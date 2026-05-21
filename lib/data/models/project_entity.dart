@@ -38,8 +38,9 @@ class ProjectEntity {
   }
 
   factory ProjectEntity.fromMap(Map<String, Object?> map) {
+    final rawId = map['id'];
     return ProjectEntity(
-      id: map['id'] as int?,
+      id: rawId is num ? rawId.toInt() : int.tryParse(rawId?.toString() ?? ''),
       name: map['name'] as String? ?? '默认项目',
       buildingName: map['buildingName'] as String? ?? '',
       standardContent: map['standardContent'] as String? ?? '[]',

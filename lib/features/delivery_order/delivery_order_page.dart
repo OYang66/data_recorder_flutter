@@ -8,6 +8,7 @@ import '../../core/widgets/app_dialog_chrome.dart';
 import '../../data/models/api/server_models.dart';
 import '../../data/repositories/server_repository.dart';
 import 'delivery_order_intake_service.dart';
+import 'delivery_order_upload_file.dart';
 
 class DeliveryOrderPage extends StatefulWidget {
   const DeliveryOrderPage({super.key, this.externalFile});
@@ -61,7 +62,8 @@ class _DeliveryOrderPageState extends State<DeliveryOrderPage> {
   void didUpdateWidget(covariant DeliveryOrderPage oldWidget) {
     super.didUpdateWidget(oldWidget);
     final externalFile = widget.externalFile;
-    if (externalFile != null && externalFile.path != oldWidget.externalFile?.path) {
+    if (externalFile != null &&
+        externalFile.path != oldWidget.externalFile?.path) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) _confirmExternalDeliveryOrderFile(externalFile);
       });
@@ -125,7 +127,9 @@ class _DeliveryOrderPageState extends State<DeliveryOrderPage> {
   Future<void> _uploadDeliveryOrder({required bool calculateNetWeight}) async {
     if (_uploading) return;
     try {
-      final path = await _exportChannel.invokeMethod<String>('pickDeliveryOrderFile');
+      final path = await _exportChannel.invokeMethod<String>(
+        'pickDeliveryOrderFile',
+      );
       if (path == null || path.isEmpty) return;
       await _uploadDeliveryOrderFromPath(
         path,
@@ -143,18 +147,22 @@ class _DeliveryOrderPageState extends State<DeliveryOrderPage> {
   Future<void> _uploadDeliveryOrderFromPath(
     String path, {
     required bool calculateNetWeight,
+    DeliveryOrderUploadFile? file,
   }) async {
     if (_uploading || path.trim().isEmpty) return;
     setState(() => _uploading = true);
     try {
       final response = await _repository.uploadDeliveryOrder(
         filePath: path,
+        fileName: file?.fileName,
         calculateNetWeight: calculateNetWeight,
       );
       if (!mounted) return;
-      _showMessage(response.isSuccess
-          ? response.displayMessage.ifEmpty('上传成功')
-          : response.displayMessage.ifEmpty('上传失败'));
+      _showMessage(
+        response.isSuccess
+            ? response.displayMessage.ifEmpty('上传成功')
+            : response.displayMessage.ifEmpty('上传失败'),
+      );
       if (response.isSuccess) await _loadFiles(pageNum: 1);
     } catch (_) {
       if (mounted) _showMessage('上传失败，请检查网络、登录状态和文件格式');
@@ -182,6 +190,11 @@ class _DeliveryOrderPageState extends State<DeliveryOrderPage> {
       await _uploadDeliveryOrderFromPath(
         file.path,
         calculateNetWeight: false,
+        file: DeliveryOrderUploadFile(
+          path: file.path,
+          fileName: file.fileName,
+          mimeType: file.mimeType,
+        ),
       );
     }
   }
@@ -208,7 +221,8 @@ class _DeliveryOrderPageState extends State<DeliveryOrderPage> {
               : ListView.separated(
                   shrinkWrap: true,
                   itemCount: items.length,
-                  separatorBuilder: (context, index) => const SizedBox(height: 8),
+                  separatorBuilder: (context, index) =>
+                      const SizedBox(height: 8),
                   itemBuilder: (context, index) {
                     final item = items[index];
                     return AppDialogListItem(
@@ -217,8 +231,12 @@ class _DeliveryOrderPageState extends State<DeliveryOrderPage> {
                           '出现次数：${item.count}\n来源：${item.sources.join('、').ifEmpty('-')}',
                       trailing: TextButton(
                         onPressed: () {
-                          Clipboard.setData(ClipboardData(text: item.materialName));
-                          _showMessage('已复制：${item.materialName.ifEmpty('未命名物料')}');
+                          Clipboard.setData(
+                            ClipboardData(text: item.materialName),
+                          );
+                          _showMessage(
+                            '已复制：${item.materialName.ifEmpty('未命名物料')}',
+                          );
                         },
                         child: const Text('复制'),
                       ),
@@ -241,13 +259,16 @@ class _DeliveryOrderPageState extends State<DeliveryOrderPage> {
         _showMessage(materialResponse.displayMessage.ifEmpty('物料配置加载失败'));
         return;
       }
-      final columns = _materialColumnsFromItems(materialResponse.data ?? const []);
-      final missingNames = (missingResponse.data ?? const <MissingMaterialItem>[])
-          .map((item) => item.materialName.trim())
-          .where((name) => name.isNotEmpty)
-          .toSet()
-          .toList()
-        ..sort();
+      final columns = _materialColumnsFromItems(
+        materialResponse.data ?? const [],
+      );
+      final missingNames =
+          (missingResponse.data ?? const <MissingMaterialItem>[])
+              .map((item) => item.materialName.trim())
+              .where((name) => name.isNotEmpty)
+              .toSet()
+              .toList()
+            ..sort();
       await showAppCardDialog<void>(
         context: context,
         title: '物料配置',
@@ -267,11 +288,14 @@ class _DeliveryOrderPageState extends State<DeliveryOrderPage> {
                         : ListView.separated(
                             shrinkWrap: true,
                             itemCount: columns.length,
-                            separatorBuilder: (context, index) => const SizedBox(height: 8),
+                            separatorBuilder: (context, index) =>
+                                const SizedBox(height: 8),
                             itemBuilder: (context, index) {
                               final column = columns[index];
                               return AppDialogListItem(
-                                label: column.materialLabel.ifEmpty(column.materialKey),
+                                label: column.materialLabel.ifEmpty(
+                                  column.materialKey,
+                                ),
                                 subtitle:
                                     '已识别名字：${column.aliases.isEmpty ? '暂无' : column.aliases.join('、')}',
                                 onTap: () async {
@@ -280,7 +304,9 @@ class _DeliveryOrderPageState extends State<DeliveryOrderPage> {
                                     missingNames: missingNames,
                                   );
                                   if (added != null) {
-                                    setDialogState(() => column.aliases.add(added));
+                                    setDialogState(
+                                      () => column.aliases.add(added),
+                                    );
                                   }
                                 },
                               );
@@ -416,7 +442,7 @@ class _DeliveryOrderPageState extends State<DeliveryOrderPage> {
           ),
         ],
       ),
-    );
+    ).whenComplete(controller.dispose);
   }
 
   Future<bool> _saveMaterialColumns(List<_MaterialColumnState> columns) async {
@@ -431,9 +457,11 @@ class _DeliveryOrderPageState extends State<DeliveryOrderPage> {
         _materialItemsFromColumns(columns),
       );
       if (!mounted) return false;
-      _showMessage(response.isSuccess
-          ? response.displayMessage.ifEmpty('保存成功')
-          : response.displayMessage.ifEmpty('保存失败'));
+      _showMessage(
+        response.isSuccess
+            ? response.displayMessage.ifEmpty('保存成功')
+            : response.displayMessage.ifEmpty('保存失败'),
+      );
       if (response.isSuccess) await _loadFiles(pageNum: 1);
       return response.isSuccess;
     } catch (error) {
@@ -452,9 +480,11 @@ class _DeliveryOrderPageState extends State<DeliveryOrderPage> {
     try {
       final response = await _repository.reparseDeliveryOrders();
       if (!mounted) return;
-      _showMessage(response.isSuccess
-          ? response.displayMessage.ifEmpty('重解析完成')
-          : response.displayMessage.ifEmpty('重解析失败'));
+      _showMessage(
+        response.isSuccess
+            ? response.displayMessage.ifEmpty('重解析完成')
+            : response.displayMessage.ifEmpty('重解析失败'),
+      );
       if (response.isSuccess) await _loadFiles(pageNum: 1);
     } catch (error) {
       if (mounted) _showMessage('重解析失败，请检查网络和登录状态');
@@ -591,9 +621,11 @@ class _DeliveryOrderPageState extends State<DeliveryOrderPage> {
     try {
       final response = await _repository.confirmDeliveryOrderNetWeight(fileId);
       if (!mounted) return;
-      _showMessage(response.isSuccess
-          ? response.displayMessage.ifEmpty('重算完成')
-          : response.displayMessage.ifEmpty('重算失败'));
+      _showMessage(
+        response.isSuccess
+            ? response.displayMessage.ifEmpty('重算完成')
+            : response.displayMessage.ifEmpty('重算失败'),
+      );
       if (response.isSuccess) await _loadFiles();
     } catch (error) {
       if (mounted) _showMessage('重算失败，请检查网络和登录状态');
@@ -616,9 +648,11 @@ class _DeliveryOrderPageState extends State<DeliveryOrderPage> {
     try {
       final response = await _repository.deleteDeliveryOrder(fileId);
       if (!mounted) return;
-      _showMessage(response.isSuccess
-          ? response.displayMessage.ifEmpty('删除成功')
-          : response.displayMessage.ifEmpty('删除失败'));
+      _showMessage(
+        response.isSuccess
+            ? response.displayMessage.ifEmpty('删除成功')
+            : response.displayMessage.ifEmpty('删除失败'),
+      );
       if (response.isSuccess) await _loadFiles();
     } catch (error) {
       if (mounted) _showMessage('删除失败，请检查网络和登录状态');
@@ -667,7 +701,8 @@ class _DeliveryOrderPageState extends State<DeliveryOrderPage> {
               : ListView.separated(
                   shrinkWrap: true,
                   itemCount: sheets.length,
-                  separatorBuilder: (context, index) => const SizedBox(height: 8),
+                  separatorBuilder: (context, index) =>
+                      const SizedBox(height: 8),
                   itemBuilder: (context, index) {
                     final item = sheets[index];
                     return AppDialogListItem(
@@ -757,7 +792,10 @@ class _DeliveryOrderPageState extends State<DeliveryOrderPage> {
       separatorBuilder: (context, index) => const SizedBox(height: 8),
       itemBuilder: (context, index) {
         if (index == 0) {
-          return _InfoCard(title: '共 $_total 个文件', subtitle: '当前第 $_pageNum 页，每页 $_pageSize 条');
+          return _InfoCard(
+            title: '共 $_total 个文件',
+            subtitle: '当前第 $_pageNum 页，每页 $_pageSize 条',
+          );
         }
         final item = _files[index - 1];
         return AppDialogListItem(
@@ -791,10 +829,11 @@ List<_MaterialColumnState> _materialColumnsFromItems(
   List<DeliveryMaterialNameItem> items,
 ) {
   final map = <String, _MaterialColumnState>{};
-  final sorted = [...items]..sort((a, b) {
-    final sort = a.sortOrder.compareTo(b.sortOrder);
-    return sort != 0 ? sort : a.materialKey.compareTo(b.materialKey);
-  });
+  final sorted = [...items]
+    ..sort((a, b) {
+      final sort = a.sortOrder.compareTo(b.sortOrder);
+      return sort != 0 ? sort : a.materialKey.compareTo(b.materialKey);
+    });
   for (final item in sorted) {
     final key = item.materialKey;
     if (key.isEmpty) continue;
@@ -816,10 +855,7 @@ List<_MaterialColumnState> _materialColumnsFromItems(
   return map.values.toList();
 }
 
-String _buildMaterialKey(
-  String label,
-  List<_MaterialColumnState> columns,
-) {
+String _buildMaterialKey(String label, List<_MaterialColumnState> columns) {
   final normalized = label
       .trim()
       .replaceAll(RegExp(r'\s+'), '_')
@@ -841,7 +877,9 @@ List<DeliveryMaterialNameItem> _materialItemsFromColumns(
   final result = <DeliveryMaterialNameItem>[];
   for (var index = 0; index < columns.length; index++) {
     final column = columns[index];
-    final aliases = column.aliases.where((alias) => alias.trim().isNotEmpty).toList();
+    final aliases = column.aliases
+        .where((alias) => alias.trim().isNotEmpty)
+        .toList();
     final values = aliases.isEmpty ? [column.materialLabel] : aliases;
     for (final alias in values) {
       result.add(
@@ -867,7 +905,10 @@ class _DeliveryHeader extends StatelessWidget {
   Widget build(BuildContext context) {
     return Row(
       children: [
-        IconButton.filledTonal(onPressed: onBack, icon: const Icon(Icons.arrow_back)),
+        IconButton.filledTonal(
+          onPressed: onBack,
+          icon: const Icon(Icons.arrow_back),
+        ),
         const SizedBox(width: 8),
         const Expanded(
           child: Column(
@@ -1018,7 +1059,10 @@ class _InfoCard extends StatelessWidget {
         children: [
           Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
           const SizedBox(height: 4),
-          Text(subtitle, style: const TextStyle(color: AppColors.textSecondary)),
+          Text(
+            subtitle,
+            style: const TextStyle(color: AppColors.textSecondary),
+          ),
         ],
       ),
     );

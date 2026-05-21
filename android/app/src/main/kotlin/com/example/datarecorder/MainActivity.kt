@@ -11,10 +11,12 @@ import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.provider.DocumentsContract
 import android.provider.MediaStore
 import android.provider.Settings
 import android.speech.RecognizerIntent
 import androidx.core.content.FileProvider
+import com.example.datarecorder.deliveryorder.DeliveryOrderExternalIntentHandler
 import com.iflytek.sparkchain.core.SparkChain
 import com.iflytek.sparkchain.core.SparkChainConfig
 import com.iflytek.sparkchain.core.asr.ASR
@@ -23,15 +25,25 @@ import java.io.File
 import java.net.URL
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {
+    private data class ExportBytesFile(
+        val fileName: String,
+        val bytes: ByteArray,
+        val mimeType: String
+    )
+
     private var pendingImageResult: MethodChannel.Result? = null
     private var pendingCameraUri: Uri? = null
+    private var pendingCameraPermissionResult: MethodChannel.Result? = null
     private var pendingSpeechResult: MethodChannel.Result? = null
     private var pendingFileResult: MethodChannel.Result? = null
     private var deliveryOrderIntakeChannel: MethodChannel? = null
     private var pendingExternalDeliveryOrderFile: Map<String, Any?>? = null
+    private var pendingExportResult: MethodChannel.Result? = null
+    private var pendingExportFiles: List<ExportBytesFile> = emptyList()
     private var fastSparkInitialized = false
     private var fastSparkAsr: ASR? = null
     private var fastSparkSessionIndex = 0
@@ -166,6 +178,7 @@ class MainActivity : FlutterActivity() {
                     val bytes = call.argument<ByteArray>("bytes") ?: ByteArray(0)
                     result.success(saveFile(fileName, bytes))
                 }
+                "exportBytesFiles" -> exportBytesFiles(call, result)
                 "saveHistory" -> {
                     val fileName = call.argument<String>("fileName") ?: "history.json"
                     val content = call.argument<String>("content") ?: "{}"
@@ -271,6 +284,18 @@ class MainActivity : FlutterActivity() {
                 val uri = if (resultCode == Activity.RESULT_OK) data?.data else null
                 result.success(uri?.let { copyContentUriToCache(it) }.orEmpty())
             }
+            7042 -> {
+                val result = pendingExportResult ?: return
+                pendingExportResult = null
+                val files = pendingExportFiles
+                pendingExportFiles = emptyList()
+                val uri = if (resultCode == Activity.RESULT_OK) data?.data else null
+                if (uri == null) {
+                    result.success(emptyList<Map<String, Any?>>())
+                } else {
+                    result.success(writeExportFilesToTree(uri, files))
+                }
+            }
         }
     }
 
@@ -280,6 +305,16 @@ class MainActivity : FlutterActivity() {
         grantResults: IntArray
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == 7013) {
+            val result = pendingCameraPermissionResult ?: return
+            pendingCameraPermissionResult = null
+            if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
+                launchQualityCamera(result)
+            } else {
+                result.error("permission_denied", "未授予相机权限，无法拍照", null)
+            }
+            return
+        }
         if (requestCode == 7041) {
             val result = fastVoicePermissionStartResult ?: return
             fastVoicePermissionStartResult = null
@@ -602,10 +637,21 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun takeQualityPhoto(result: MethodChannel.Result) {
-        if (pendingImageResult != null) {
+        if (pendingImageResult != null || pendingCameraPermissionResult != null) {
             result.success("")
             return
         }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M &&
+            checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED
+        ) {
+            pendingCameraPermissionResult = result
+            requestPermissions(arrayOf(Manifest.permission.CAMERA), 7013)
+            return
+        }
+        launchQualityCamera(result)
+    }
+
+    private fun launchQualityCamera(result: MethodChannel.Result) {
         val file = java.io.File(cacheDir, "quality_${System.currentTimeMillis()}.jpg")
         val uri = FileProvider.getUriForFile(this, "${packageName}.fileprovider", file)
         pendingCameraUri = uri
@@ -614,7 +660,13 @@ class MainActivity : FlutterActivity() {
             putExtra(MediaStore.EXTRA_OUTPUT, uri)
             addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
-        startActivityForResult(intent, 7011)
+        try {
+            startActivityForResult(intent, 7011)
+        } catch (error: Exception) {
+            pendingCameraUri = null
+            pendingImageResult = null
+            result.error("camera_failed", error.message, null)
+        }
     }
 
     private fun pickQualityPhoto(result: MethodChannel.Result) {
@@ -631,45 +683,100 @@ class MainActivity : FlutterActivity() {
         startActivityForResult(intent, 7012)
     }
 
-    private fun handleExternalDeliveryOrderIntent(intent: Intent?): Boolean {
-        val uri = extractExternalDeliveryOrderUri(intent) ?: return false
-        if (!isSupportedDeliveryOrderFile(uri)) return false
-        return try {
-            val path = copyContentUriToCache(uri)
-            val payload = mapOf(
-                "path" to path,
-                "fileName" to File(path).name,
-                "source" to "android_intent"
+    private fun bytesArgument(value: Any?): ByteArray? {
+        return when (value) {
+            is ByteArray -> value
+            is List<*> -> {
+                val bytes = ByteArray(value.size)
+                value.forEachIndexed { index, item ->
+                    val intValue = (item as? Number)?.toInt() ?: return null
+                    if (intValue !in 0..255) return null
+                    bytes[index] = intValue.toByte()
+                }
+                bytes
+            }
+            else -> null
+        }
+    }
+
+    private fun exportBytesFiles(call: MethodCall, result: MethodChannel.Result) {
+        if (pendingExportResult != null) {
+            result.success(emptyList<Map<String, Any?>>())
+            return
+        }
+        @Suppress("UNCHECKED_CAST")
+        val rawFiles = call.argument<List<Map<String, Any?>>>("files") ?: emptyList()
+        val files = rawFiles.mapNotNull { raw ->
+            val fileName = raw["fileName"]?.toString()?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            val bytes = bytesArgument(raw["bytes"]) ?: return@mapNotNull null
+            val mimeType = raw["mimeType"]?.toString()?.takeIf { it.isNotBlank() } ?: "application/octet-stream"
+            ExportBytesFile(fileName, bytes, mimeType)
+        }
+        if (files.isEmpty()) {
+            result.success(emptyList<Map<String, Any?>>())
+            return
+        }
+        pendingExportResult = result
+        pendingExportFiles = files
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
+            addFlags(
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                    Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+                    Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or
+                    Intent.FLAG_GRANT_PREFIX_URI_PERMISSION
             )
+            val lastUri = getSharedPreferences("export_share", MODE_PRIVATE).getString("last_export_tree_uri", "")
+            if (!lastUri.isNullOrBlank() && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                putExtra(DocumentsContract.EXTRA_INITIAL_URI, Uri.parse(lastUri))
+            }
+        }
+        startActivityForResult(intent, 7042)
+    }
+
+    private fun writeExportFilesToTree(
+        treeUri: Uri,
+        files: List<ExportBytesFile>
+    ): List<Map<String, Any?>> {
+        runCatching {
+            contentResolver.takePersistableUriPermission(
+                treeUri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            )
+        }
+        getSharedPreferences("export_share", MODE_PRIVATE)
+            .edit()
+            .putString("last_export_tree_uri", treeUri.toString())
+            .apply()
+        val treeDocumentId = DocumentsContract.getTreeDocumentId(treeUri)
+        val directoryUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, treeDocumentId)
+        return files.mapNotNull { file ->
+            val safeName = file.fileName.replace(Regex("[\\\\/:*?\"<>|]"), "_")
+            val documentUri = DocumentsContract.createDocument(
+                contentResolver,
+                directoryUri,
+                file.mimeType,
+                safeName
+            ) ?: return@mapNotNull null
+            contentResolver.openOutputStream(documentUri)?.use { output ->
+                output.write(file.bytes)
+            }
+            mapOf(
+                "fileName" to safeName,
+                "uri" to documentUri.toString(),
+                "success" to true
+            )
+        }
+    }
+
+    private fun handleExternalDeliveryOrderIntent(intent: Intent?): Boolean {
+        return try {
+            val file = DeliveryOrderExternalIntentHandler(this).handle(intent) ?: return false
+            val payload = file.toChannelMap()
             pendingExternalDeliveryOrderFile = payload
             deliveryOrderIntakeChannel?.invokeMethod("onDeliveryOrderFile", payload)
             true
         } catch (_: Exception) {
             false
-        }
-    }
-
-    private fun extractExternalDeliveryOrderUri(intent: Intent?): Uri? {
-        if (intent == null) return null
-        return when (intent.action) {
-            Intent.ACTION_SEND -> {
-                @Suppress("DEPRECATION")
-                intent.getParcelableExtra(Intent.EXTRA_STREAM) as? Uri ?: intent.data
-            }
-            Intent.ACTION_VIEW -> intent.data
-            else -> null
-        }
-    }
-
-    private fun isSupportedDeliveryOrderFile(uri: Uri): Boolean {
-        val name = queryDisplayName(uri).ifBlank { uri.lastPathSegment.orEmpty() }.lowercase()
-        if (name.endsWith(".xlsx") || name.endsWith(".xls") || name.endsWith(".zip")) return true
-        return when (contentResolver.getType(uri)?.lowercase()) {
-            "application/vnd.ms-excel",
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            "application/zip",
-            "application/x-zip-compressed" -> true
-            else -> false
         }
     }
 

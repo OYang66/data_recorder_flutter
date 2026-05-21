@@ -26,9 +26,10 @@ class _DataRecorderAppState extends State<DataRecorderApp> {
       appRouter.go('/login');
     });
     DeliveryOrderIntakeService.instance.initialize();
-    _deliveryOrderSubscription = DeliveryOrderIntakeService.instance.files.listen((file) {
-      appRouter.go('/delivery-order', extra: file);
-    });
+    _deliveryOrderSubscription = DeliveryOrderIntakeService.instance.files
+        .listen((file) {
+          appRouter.go('/delivery-order', extra: file);
+        });
   }
 
   @override

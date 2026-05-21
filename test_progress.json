@@ -1,0 +1,35 @@
+{
+  "startedAt": "2026-05-21",
+  "finishedAt": "2026-05-21",
+  "dataRows": 400,
+  "currentPhase": "completed_all_passed",
+  "lastCommand": "flutter test integration_test/full_test.dart --dart-define=DATA_ROWS=400",
+  "lastFailure": null,
+  "finalResult": {
+    "status": "passed",
+    "summary": "最终全功能冒烟测试和 400 行压测通过，未发现被测应用 Crash/ANR/EXCEPTION。",
+    "fastRowsElapsedMs": 7589,
+    "memory": {
+      "totalPssKb": 349232,
+      "totalRssKb": 485560,
+      "totalSwapPssKb": 41
+    },
+    "jankConclusion": "400 行录入和业务模块阶段未复现 Choreographer 跳帧；历史跳帧主要来自 debug integration_test 冷启动/系统 Activity 切换或登录首帧切换。"
+  },
+  "completedModules": [
+    "测试基础设施",
+    "静态分析",
+    "调试包构建安装",
+    "登录流程",
+    "主页顶部按钮",
+    "模式切换",
+    "400行录入压测",
+    "更多功能入口",
+    "发货单模块",
+    "结算数据模块",
+    "P1卡顿 profiling",
+    "最终全量复测",
+    "最终测试报告"
+  ],
+  "pendingModules": []
+}
