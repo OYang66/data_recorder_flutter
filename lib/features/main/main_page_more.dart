@@ -320,6 +320,38 @@ extension _MainPageMore on _MainPageState {
     }
   }
 
+  String _normalizeAppDownloadUrl(String rawUrl) {
+    final url = rawUrl.trim();
+    if (url.startsWith('http://') || url.startsWith('https://')) {
+      return url;
+    }
+    final baseUrl = ApiConstants.baseUrl.endsWith('/')
+        ? ApiConstants.baseUrl.substring(0, ApiConstants.baseUrl.length - 1)
+        : ApiConstants.baseUrl;
+    final path = url.startsWith('/') ? url : '/$url';
+    return '$baseUrl$path';
+  }
+
+  Future<void> _showIosUpdateUnavailable(String versionName) {
+    return showAppCardDialog<void>(
+      context: context,
+      title: 'iOS 暂无在线更新方式',
+      subtitle: '苹果系统限制',
+      builder: (context) => Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text('已检测到新版本 $versionName，但因苹果系统限制，当前 iOS 版本暂不支持在应用内直接下载安装更新。'),
+          const SizedBox(height: 16),
+          AppDialogActionButton(
+            text: '知道了',
+            onPressed: () => Navigator.of(context).pop(),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _checkAppUpdate() async {
     try {
       final response = await _versionRepository.getLatestVersion();
@@ -356,19 +388,25 @@ extension _MainPageMore on _MainPageState {
           ],
         ),
       );
-      if (shouldUpdate != true) return;
+      if (shouldUpdate != true || !mounted) return;
+      if (Platform.isIOS) {
+        await _showIosUpdateUnavailable(info.versionName);
+        return;
+      }
       _showNotReady('正在下载更新，请稍候');
-      await _MainPageState._updateChannel.invokeMethod<String>(
-        'downloadAndInstall',
-        {'url': info.downloadUrl, 'versionCode': info.versionCode},
-      );
+      await _MainPageState._updateChannel
+          .invokeMethod<String>('downloadAndInstall', {
+            'url': _normalizeAppDownloadUrl(info.downloadUrl),
+            'versionCode': info.versionCode,
+          });
     } catch (error) {
-      if (mounted) _showNotReady('更新检查失败，请检查网络');
+      if (mounted) _showNotReady('更新失败，请检查网络');
     }
   }
 
   Future<void> _showHistoryDialog() async {
     final history = await _listHistory();
+    final historyGroups = _groupHistoryByProject(history);
     if (!mounted) return;
     await showAppCardDialog<void>(
       context: context,
@@ -390,32 +428,69 @@ extension _MainPageMore on _MainPageState {
             ),
             const SizedBox(height: 12),
             Flexible(
-              child: history.isEmpty
+              child: historyGroups.isEmpty
                   ? const Padding(
                       padding: EdgeInsets.symmetric(vertical: 18),
                       child: Text('暂无历史备份'),
                     )
                   : ListView.separated(
                       shrinkWrap: true,
-                      itemCount: history.length,
+                      itemCount: historyGroups.length,
                       separatorBuilder: (_, _) => const SizedBox(height: 8),
-                      itemBuilder: (context, index) {
-                        final item = history[index];
-                        final path = item['path']?.toString() ?? '';
-                        return AppDialogListItem(
-                          label: item['name']?.toString() ?? '',
-                          subtitle: _formatHistoryTime(item['modified']),
-                          trailing: IconButton(
-                            icon: const Icon(Icons.delete_outline),
-                            onPressed: () {
-                              Navigator.of(context).pop();
-                              _deleteHistory(path);
-                            },
+                      itemBuilder: (context, groupIndex) {
+                        final group = historyGroups[groupIndex];
+                        return Theme(
+                          data: Theme.of(
+                            context,
+                          ).copyWith(dividerColor: Colors.transparent),
+                          child: ExpansionTile(
+                            tilePadding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                            ),
+                            childrenPadding: const EdgeInsets.only(
+                              left: 8,
+                              right: 8,
+                              bottom: 8,
+                            ),
+                            title: Text(
+                              group.key,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            subtitle: Text('${group.value.length} 个备份'),
+                            children: [
+                              for (
+                                var index = 0;
+                                index < group.value.length;
+                                index++
+                              ) ...[
+                                if (index > 0) const SizedBox(height: 8),
+                                Builder(
+                                  builder: (context) {
+                                    final item = group.value[index];
+                                    final path = item['path']?.toString() ?? '';
+                                    return AppDialogListItem(
+                                      label: _formatHistoryTime(
+                                        item['modified'],
+                                      ).ifEmpty(item['name']?.toString() ?? ''),
+                                      subtitle: item['name']?.toString() ?? '',
+                                      trailing: IconButton(
+                                        icon: const Icon(Icons.delete_outline),
+                                        onPressed: () {
+                                          Navigator.of(context).pop();
+                                          _deleteHistory(path);
+                                        },
+                                      ),
+                                      onTap: () {
+                                        Navigator.of(context).pop();
+                                        _restoreHistory(path);
+                                      },
+                                    );
+                                  },
+                                ),
+                              ],
+                            ],
                           ),
-                          onTap: () {
-                            Navigator.of(context).pop();
-                            _restoreHistory(path);
-                          },
                         );
                       },
                     ),
@@ -538,6 +613,53 @@ extension _MainPageMore on _MainPageState {
       'path': path,
     });
     if (mounted) _showNotReady('历史备份已删除');
+  }
+
+  List<MapEntry<String, List<Map<String, Object?>>>> _groupHistoryByProject(
+    List<Map<String, Object?>> history,
+  ) {
+    final groups = <String, List<Map<String, Object?>>>{};
+    for (final item in history) {
+      final projectName = _historyProjectName(item);
+      groups.putIfAbsent(projectName, () => []).add(item);
+    }
+    final entries = groups.entries.toList();
+    for (final entry in entries) {
+      entry.value.sort(
+        (left, right) => _historyModifiedMillis(
+          right,
+        ).compareTo(_historyModifiedMillis(left)),
+      );
+    }
+    entries.sort((left, right) {
+      final rightTime = right.value.isEmpty
+          ? 0
+          : _historyModifiedMillis(right.value.first);
+      final leftTime = left.value.isEmpty
+          ? 0
+          : _historyModifiedMillis(left.value.first);
+      final timeCompare = rightTime.compareTo(leftTime);
+      if (timeCompare != 0) return timeCompare;
+      return left.key.compareTo(right.key);
+    });
+    return entries;
+  }
+
+  String _historyProjectName(Map<String, Object?> item) {
+    const marker = '_历史数据自动备份_';
+    final name = item['name']?.toString() ?? '';
+    final markerIndex = name.indexOf(marker);
+    final projectName = markerIndex <= 0
+        ? ''
+        : name.substring(0, markerIndex).trim();
+    return projectName.isEmpty ? '未分类项目' : projectName;
+  }
+
+  int _historyModifiedMillis(Map<String, Object?> item) {
+    final value = item['modified'];
+    return value is num
+        ? value.toInt()
+        : int.tryParse(value?.toString() ?? '') ?? 0;
   }
 
   String _formatHistoryTime(Object? value) {

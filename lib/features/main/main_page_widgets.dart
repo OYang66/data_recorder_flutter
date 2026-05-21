@@ -1256,7 +1256,7 @@ class _TableLine extends StatelessWidget {
                   : _displayCellText(row!, column.key),
               width: dataColumnWidth,
               header: isHeader,
-              selected: currentKey == column.key,
+              selected: !isHeader && currentKey == column.key,
               selectedRow: selectedRow,
             ),
           ),

@@ -490,35 +490,37 @@ import UIKit
     let directory = try historyDirectory()
     let url = directory.appendingPathComponent(safeFileName(fileName))
     try content.write(to: url, atomically: true, encoding: .utf8)
-    trimHistoryBackups(fileName: url.lastPathComponent, keepCount: 5)
+    trimHistoryBackups(keepCount: 5)
     return url.path
   }
 
-  private func trimHistoryBackups(fileName: String, keepCount: Int) {
+  private func trimHistoryBackups(keepCount: Int) {
     guard let directory = try? historyDirectory() else {
       return
     }
     let marker = "_历史数据自动备份_"
-    let prefix = fileName.components(separatedBy: marker).first ?? ""
-    guard !prefix.isEmpty else {
-      return
-    }
     let files = (try? FileManager.default.contentsOfDirectory(
       at: directory,
       includingPropertiesForKeys: [.contentModificationDateKey],
       options: [.skipsHiddenFiles]
     )) ?? []
-    let matched = files.filter { url in
-      url.lastPathComponent.hasPrefix("\(prefix)\(marker)") && url.pathExtension == "json"
-    }.sorted { lhs, rhs in
-      let leftDate = (try? lhs.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
-      let rightDate = (try? rhs.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
-      return leftDate > rightDate
+    let groupedFiles = Dictionary(grouping: files.filter { url in
+      url.pathExtension == "json" && url.lastPathComponent.contains(marker)
+    }) { url in
+      url.lastPathComponent.components(separatedBy: marker).first ?? ""
     }
-    matched.dropFirst(keepCount).forEach { try? FileManager.default.removeItem(at: $0) }
+    groupedFiles.values.forEach { files in
+      let sorted = files.sorted { lhs, rhs in
+        let leftDate = (try? lhs.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+        let rightDate = (try? rhs.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+        return leftDate > rightDate
+      }
+      sorted.dropFirst(keepCount).forEach { try? FileManager.default.removeItem(at: $0) }
+    }
   }
 
   private func listHistory() -> [[String: Any]] {
+    trimHistoryBackups(keepCount: 5)
     guard let directory = try? historyDirectory() else {
       return []
     }

@@ -44,6 +44,7 @@ class MainActivity : FlutterActivity() {
     private var pendingExternalDeliveryOrderFile: Map<String, Any?>? = null
     private var pendingExportResult: MethodChannel.Result? = null
     private var pendingExportFiles: List<ExportBytesFile> = emptyList()
+    private val updateDownloadHandler by lazy { AppUpdateDownloadHandler(this) }
     private var fastSparkInitialized = false
     private var fastSparkAsr: ASR? = null
     private var fastSparkSessionIndex = 0
@@ -122,11 +123,8 @@ class MainActivity : FlutterActivity() {
                     val versionCode = call.argument<Number>("versionCode")?.toInt() ?: 0
                     Thread {
                         try {
-                            val path = downloadApk(url, versionCode)
-                            runOnUiThread {
-                                installApk(path)
-                                result.success(path)
-                            }
+                            val path = updateDownloadHandler.downloadAndInstall(url, versionCode)
+                            runOnUiThread { result.success(path) }
                         } catch (error: Exception) {
                             runOnUiThread { result.error("download_failed", error.message, null) }
                         }
@@ -254,6 +252,11 @@ class MainActivity : FlutterActivity() {
         handleExternalDeliveryOrderIntent(intent)
     }
 
+    override fun onResume() {
+        super.onResume()
+        updateDownloadHandler.onHostResume()
+    }
+
     @Deprecated("Deprecated in Java")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
@@ -293,7 +296,22 @@ class MainActivity : FlutterActivity() {
                 if (uri == null) {
                     result.success(emptyList<Map<String, Any?>>())
                 } else {
-                    result.success(writeExportFilesToTree(uri, files))
+                    val progressDialog = AppProcessingDialog(this)
+                    progressDialog.show("正在导出文件")
+                    Thread {
+                        try {
+                            val exportedFiles = writeExportFilesToTree(uri, files)
+                            runOnUiThread {
+                                progressDialog.dismiss()
+                                result.success(exportedFiles)
+                            }
+                        } catch (error: Exception) {
+                            runOnUiThread {
+                                progressDialog.dismiss()
+                                result.error("export_failed", error.message, null)
+                            }
+                        }
+                    }.start()
                 }
             }
         }
@@ -872,26 +890,25 @@ class MainActivity : FlutterActivity() {
         val safeFileName = fileName.replace(Regex("[\\\\/:*?\"<>|]"), "_")
         val file = java.io.File(historyDir(), safeFileName)
         file.writeText(content, Charsets.UTF_8)
-        trimHistoryBackups(safeFileName, 5)
+        trimHistoryBackups(5)
         return file.absolutePath
     }
 
-    private fun trimHistoryBackups(fileName: String, keepCount: Int) {
+    private fun trimHistoryBackups(keepCount: Int) {
         val marker = "_历史数据自动备份_"
-        val prefix = fileName.substringBefore(marker, missingDelimiterValue = "")
-        if (prefix.isBlank()) return
-        historyDir().listFiles()
-            ?.filter {
-                it.isFile &&
-                    it.name.startsWith("${prefix}${marker}") &&
-                    it.name.endsWith(".json")
-            }
-            ?.sortedByDescending { it.lastModified() }
-            ?.drop(keepCount)
-            ?.forEach { it.delete() }
+        val groupedFiles = historyDir().listFiles()
+            ?.filter { it.isFile && it.name.endsWith(".json") && it.name.contains(marker) }
+            ?.groupBy { it.name.substringBefore(marker) }
+            ?: return
+        groupedFiles.values.forEach { files ->
+            files.sortedByDescending { it.lastModified() }
+                .drop(keepCount)
+                .forEach { it.delete() }
+        }
     }
 
     private fun listHistory(): List<Map<String, Any?>> {
+        trimHistoryBackups(5)
         return historyDir().listFiles()
             ?.filter { it.isFile && it.name.endsWith(".json") }
             ?.sortedByDescending { it.lastModified() }

@@ -1,6 +1,48 @@
 part of 'main_page.dart';
 
 extension _MainPageExport on _MainPageState {
+  void _showExportProgressDialog(String message) {
+    showAppCardDialog<void>(
+      context: context,
+      title: '正在处理',
+      subtitle: message,
+      barrierDismissible: false,
+      showCloseButton: false,
+      builder: (context) => const Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Center(child: CircularProgressIndicator()),
+          SizedBox(height: 12),
+          Text(
+            '请稍候，不要退出应用',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: AppColors.textSecondary),
+          ),
+        ],
+      ),
+    ).ignore();
+  }
+
+  void _dismissExportProgressDialog() {
+    if (!mounted) return;
+    final navigator = Navigator.of(context, rootNavigator: true);
+    if (navigator.canPop()) navigator.pop();
+  }
+
+  Future<T> _runWithExportProgress<T>(
+    String message,
+    FutureOr<T> Function() action,
+  ) async {
+    _showExportProgressDialog(message);
+    await Future<void>.delayed(const Duration(milliseconds: 16));
+    try {
+      return await Future<T>.sync(action);
+    } finally {
+      _dismissExportProgressDialog();
+    }
+  }
+
   Future<void> _uploadCurrentModeToServer() async {
     await _saveCurrentDraft();
     final project = _project;
@@ -80,55 +122,61 @@ extension _MainPageExport on _MainPageState {
       _showNoDataMessage(forExport: false);
       return;
     }
-    final workbook = xlsio.Workbook();
-    final sheet = workbook.worksheets[0];
-    sheet.name = '返厂汇总';
-    final headers = ['项目', '楼栋', '车次', '铝模重量', '铁件重量', '装车时间', '车牌号'];
-    for (var i = 0; i < headers.length; i++) {
-      final cell = sheet.getRangeByIndex(1, i + 1);
-      cell.setText(headers[i]);
-      cell.cellStyle.bold = true;
-    }
-    for (var i = 0; i < tripNames.length; i++) {
-      final tripName = tripNames[i];
-      final rows = _decodeLoadingRowsForTrip(
-        project.loadingContent,
-        tripName,
-        buildingName: buildingName,
-      );
-      final meta = rows.firstWhere(_isLoadingMetaRow, orElse: _emptyLoadingRow);
-      final vehicleInfo = _emptyVehicleInfo().map(
-        (key, value) => MapEntry(key, meta['vehicle_$key'] ?? value),
-      );
-      final aluminumRows = rows.where(_isAluminumLoadingRow).toList();
-      final ironRows = rows.where(_isIronLoadingRow).toList();
-      final aluminumTotal =
-          meta['loadingAluminumWeightMode'] == 'WEIGHBRIDGE_TOTAL'
-          ? _loadingAluminumWeighbridgeWeightFromInfo(vehicleInfo)
-          : _sumDouble(aluminumRows, 'weight');
-      final ironTotal = meta['loadingIronWeightMode'] == 'WEIGHBRIDGE_TOTAL'
-          ? _loadingIronWeighbridgeWeightFromInfo(vehicleInfo)
-          : _sumDouble(ironRows, 'weight');
-      final rowIndex = i + 2;
-      sheet.getRangeByIndex(rowIndex, 1).setText(project.name);
-      sheet
-          .getRangeByIndex(rowIndex, 2)
-          .setText(project.buildingName.ifEmpty('1号楼'));
-      sheet.getRangeByIndex(rowIndex, 3).setText(tripName);
-      sheet.getRangeByIndex(rowIndex, 4).setNumber(aluminumTotal);
-      sheet.getRangeByIndex(rowIndex, 5).setNumber(ironTotal);
-      sheet
-          .getRangeByIndex(rowIndex, 6)
-          .setText(vehicleInfo['loadingDate'].orEmpty());
-      sheet
-          .getRangeByIndex(rowIndex, 7)
-          .setText(vehicleInfo['vehiclePlateNumber'].orEmpty());
-    }
-    for (var i = 1; i <= headers.length; i++) {
-      sheet.autoFitColumn(i);
-    }
-    final bytes = workbook.saveAsStream();
-    workbook.dispose();
+    final bytes = await _runWithExportProgress('正在生成返厂汇总表', () {
+      final workbook = xlsio.Workbook();
+      final sheet = workbook.worksheets[0];
+      sheet.name = '返厂汇总';
+      final headers = ['项目', '楼栋', '车次', '铝模重量', '铁件重量', '装车时间', '车牌号'];
+      for (var i = 0; i < headers.length; i++) {
+        final cell = sheet.getRangeByIndex(1, i + 1);
+        cell.setText(headers[i]);
+        cell.cellStyle.bold = true;
+      }
+      for (var i = 0; i < tripNames.length; i++) {
+        final tripName = tripNames[i];
+        final rows = _decodeLoadingRowsForTrip(
+          project.loadingContent,
+          tripName,
+          buildingName: buildingName,
+        );
+        final meta = rows.firstWhere(
+          _isLoadingMetaRow,
+          orElse: _emptyLoadingRow,
+        );
+        final vehicleInfo = _emptyVehicleInfo().map(
+          (key, value) => MapEntry(key, meta['vehicle_$key'] ?? value),
+        );
+        final aluminumRows = rows.where(_isAluminumLoadingRow).toList();
+        final ironRows = rows.where(_isIronLoadingRow).toList();
+        final aluminumTotal =
+            meta['loadingAluminumWeightMode'] == 'WEIGHBRIDGE_TOTAL'
+            ? _loadingAluminumWeighbridgeWeightFromInfo(vehicleInfo)
+            : _sumDouble(aluminumRows, 'weight');
+        final ironTotal = meta['loadingIronWeightMode'] == 'WEIGHBRIDGE_TOTAL'
+            ? _loadingIronWeighbridgeWeightFromInfo(vehicleInfo)
+            : _sumDouble(ironRows, 'weight');
+        final rowIndex = i + 2;
+        sheet.getRangeByIndex(rowIndex, 1).setText(project.name);
+        sheet
+            .getRangeByIndex(rowIndex, 2)
+            .setText(project.buildingName.ifEmpty('1号楼'));
+        sheet.getRangeByIndex(rowIndex, 3).setText(tripName);
+        sheet.getRangeByIndex(rowIndex, 4).setNumber(aluminumTotal);
+        sheet.getRangeByIndex(rowIndex, 5).setNumber(ironTotal);
+        sheet
+            .getRangeByIndex(rowIndex, 6)
+            .setText(vehicleInfo['loadingDate'].orEmpty());
+        sheet
+            .getRangeByIndex(rowIndex, 7)
+            .setText(vehicleInfo['vehiclePlateNumber'].orEmpty());
+      }
+      for (var i = 1; i <= headers.length; i++) {
+        sheet.autoFitColumn(i);
+      }
+      final bytes = workbook.saveAsStream();
+      workbook.dispose();
+      return bytes;
+    });
     await _MainPageState._exportChannel.invokeMethod<void>('shareBytesFile', {
       'fileName':
           '${project.name}_返厂汇总表_${DateTime.now().millisecondsSinceEpoch}.xlsx',
@@ -147,9 +195,12 @@ extension _MainPageExport on _MainPageState {
       return;
     }
     final rows = _rows;
-    final files = _mode == MainMode.quality
-        ? await _qualityExportFiles(project, rows)
-        : _currentProjectStatisticsExportFiles(project);
+    final files = await _runWithExportProgress<List<_ExportFilePayload>>(
+      '正在生成导出文件',
+      () => _mode == MainMode.quality
+          ? _qualityExportFiles(project, rows)
+          : _currentProjectStatisticsExportFiles(project),
+    );
     if (files.isEmpty) {
       _showNoDataMessage(forExport: true);
       return;
@@ -232,12 +283,18 @@ extension _MainPageExport on _MainPageState {
       return;
     }
     if (_mode == MainMode.quality) {
-      await _shareQualityDocument(project, rows);
+      await _runWithExportProgress(
+        '正在生成分享文件',
+        () => _shareQualityDocument(project, rows),
+      );
       return;
     }
-    final bytes = _mode == MainMode.loading
-        ? _buildLoadingExcel(project)
-        : _buildCurrentModeExcel(project, rows);
+    final bytes = await _runWithExportProgress(
+      '正在生成分享文件',
+      () => _mode == MainMode.loading
+          ? _buildLoadingExcel(project)
+          : _buildCurrentModeExcel(project, rows),
+    );
     await _MainPageState._exportChannel.invokeMethod<void>('shareBytesFile', {
       'fileName': _currentModeExcelFileName(project),
       'bytes': bytes,
