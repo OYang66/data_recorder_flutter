@@ -7,20 +7,28 @@ extension _MainPageFastVoice on _MainPageState {
 
   Future<void> _beginFastVoiceHold() async {
     if (_fastVoiceStarting || _fastVoiceListening || _fastVoiceWaitingResult) {
-      _showNotReady('语音识别正在进行中');
+      _showFastVoiceToast('语音识别正在进行中');
       return;
     }
     final holdGeneration = ++_fastVoiceHoldGeneration;
-    _setMainState(() {
-      _fastVoicePressed = true;
-      _fastVoiceStarting = true;
-      _fastVoicePressStartedAt = DateTime.now();
-    });
+    _fastVoicePressed = true;
+    _fastVoiceStarting = true;
+    _fastVoicePressStartedAt = DateTime.now();
+    _showFastVoiceHoldDialog();
+    _scheduleFastVoiceStartTimeout(holdGeneration);
     try {
+      await WidgetsBinding.instance.endOfFrame;
+      if (!mounted ||
+          holdGeneration != _fastVoiceHoldGeneration ||
+          !_fastVoicePressed) {
+        return;
+      }
+      unawaited(HapticFeedback.lightImpact());
       await _MainPageState._fastVoiceChannel.invokeMethod<void>(
         'startListening',
       );
       if (!mounted || holdGeneration != _fastVoiceHoldGeneration) return;
+      _fastVoiceStartTimeoutTimer?.cancel();
       if (!_fastVoicePressed) {
         _setMainState(() {
           _fastVoiceStarting = false;
@@ -36,13 +44,13 @@ extension _MainPageFastVoice on _MainPageState {
         _fastVoiceStarting = false;
         _fastVoiceListening = true;
       });
-      _showFastVoiceHoldDialog();
       _fastVoiceTimeoutTimer?.cancel();
       _fastVoiceTimeoutTimer = Timer(
         const Duration(seconds: 12),
         () => unawaited(_finishFastVoiceHold(timedOut: true)),
       );
     } catch (error) {
+      _fastVoiceStartTimeoutTimer?.cancel();
       _fastVoiceTimeoutTimer?.cancel();
       _dismissFastVoiceHoldDialog();
       if (!mounted || holdGeneration != _fastVoiceHoldGeneration) return;
@@ -53,7 +61,7 @@ extension _MainPageFastVoice on _MainPageState {
         _fastVoiceWaitingResult = false;
         _fastVoicePressStartedAt = null;
       });
-      _showNotReady(_fastVoiceErrorMessage(error));
+      _showFastVoiceToast(_fastVoiceErrorMessage(error));
     }
   }
 
@@ -67,9 +75,10 @@ extension _MainPageFastVoice on _MainPageState {
         !timedOut &&
         startedAt != null &&
         DateTime.now().difference(startedAt).inMilliseconds < 300;
+    _fastVoiceStartTimeoutTimer?.cancel();
     _fastVoiceTimeoutTimer?.cancel();
     if (tooShort || _fastVoiceStarting) {
-      await _cancelFastVoiceHold(showTooShortToast: tooShort);
+      unawaited(_cancelFastVoiceHold(showTooShortToast: tooShort));
       return;
     }
     _setMainState(() {
@@ -86,13 +95,13 @@ extension _MainPageFastVoice on _MainPageState {
       _dismissFastVoiceHoldDialog();
       if (!mounted) return;
       if (text == null || text.trim().isEmpty) {
-        _showNotReady('未识别到清晰语音');
+        _showFastVoiceToast('未识别到清晰语音');
         return;
       }
       await _applyFastVoiceText(text);
     } catch (error) {
       _dismissFastVoiceHoldDialog();
-      if (mounted) _showNotReady(_fastVoiceErrorMessage(error));
+      if (mounted) _showFastVoiceToast(_fastVoiceErrorMessage(error));
     } finally {
       if (mounted) {
         _setMainState(() {
@@ -106,16 +115,12 @@ extension _MainPageFastVoice on _MainPageState {
     }
   }
 
-  Future<void> _cancelFastVoiceHold({bool showTooShortToast = false}) async {
+  Future<void> _cancelFastVoiceHold({bool showTooShortToast = false}) {
     _fastVoiceHoldGeneration++;
+    _fastVoiceStartTimeoutTimer?.cancel();
     _fastVoiceTimeoutTimer?.cancel();
-    try {
-      await _MainPageState._fastVoiceChannel.invokeMethod<void>(
-        'cancelListening',
-      );
-    } catch (_) {}
     _dismissFastVoiceHoldDialog();
-    if (!mounted) return;
+    if (!mounted) return Future<void>.value();
     _setMainState(() {
       _fastVoicePressed = false;
       _fastVoiceStarting = false;
@@ -124,8 +129,32 @@ extension _MainPageFastVoice on _MainPageState {
       _fastVoicePressStartedAt = null;
     });
     if (showTooShortToast) {
-      _showNotReady('请长按后说话');
+      _showFastVoiceToast('请长按后说话');
     }
+    unawaited(
+      _MainPageState._fastVoiceChannel
+          .invokeMethod<void>('cancelListening')
+          .catchError((_) {}),
+    );
+    return Future<void>.value();
+  }
+
+  void _scheduleFastVoiceStartTimeout(int holdGeneration) {
+    _fastVoiceStartTimeoutTimer?.cancel();
+    _fastVoiceStartTimeoutTimer = Timer(const Duration(seconds: 3), () {
+      if (!mounted ||
+          holdGeneration != _fastVoiceHoldGeneration ||
+          !_fastVoiceStarting) {
+        return;
+      }
+      unawaited(_cancelFastVoiceHold());
+      _showFastVoiceToast('语音启动较慢，请稍后重试');
+    });
+  }
+
+  void _showFastVoiceToast(String message) {
+    final bottomMargin = MediaQuery.sizeOf(context).height * 0.28;
+    showAppToast(context, message, bottomMargin: bottomMargin);
   }
 
   void _showFastVoiceHoldDialog() {
@@ -195,13 +224,13 @@ extension _MainPageFastVoice on _MainPageState {
   Future<void> _applyFastVoiceText(String text) async {
     final pair = _parseFastVoiceSizePair(text);
     if (pair == null) {
-      _showNotReady('未识别到尺寸格式，请说类似‘200乘300’或‘400乘1米1’');
+      _showFastVoiceToast('未识别到尺寸格式，请说类似‘200乘300’或‘400乘1米1’');
       return;
     }
     final width = double.tryParse(pair.$1) ?? 0;
     final length = double.tryParse(pair.$2) ?? 0;
     if (width <= 0 || length <= 0 || width > 600 || length > 4500) {
-      _showNotReady('识别成功，但尺寸超出当前 FAST 可录入范围');
+      _showFastVoiceToast('识别成功，但尺寸超出当前 FAST 可录入范围');
       return;
     }
     _setMainState(() {
@@ -316,9 +345,12 @@ extension _MainPageFastVoice on _MainPageState {
         }
         return;
       }
+      final statusData = status.data;
+      final sessionCount = statusData?.sessionCount ?? 0;
       _setMainState(() {
-        _subDisplayConnected = status.data?.connected == true;
-        _subDisplaySessionCount = status.data?.sessionCount ?? 0;
+        _subDisplayConnected =
+            statusData?.connected == true || sessionCount > 0;
+        _subDisplaySessionCount = sessionCount;
       });
       await showAppCardDialog<void>(
         context: context,
@@ -351,7 +383,7 @@ extension _MainPageFastVoice on _MainPageState {
               onCancel: () => Navigator.of(context).pop(),
               onConfirm: () {
                 Navigator.of(context).pop();
-                _pushFastSnapshotToSubDisplay();
+                _pushFastSnapshotToSubDisplay(showNoReceiverMessage: true);
               },
             ),
           ],
@@ -362,8 +394,17 @@ extension _MainPageFastVoice on _MainPageState {
     }
   }
 
-  Future<void> _pushFastSnapshotToSubDisplay({bool force = false}) async {
+  Future<void> _pushFastSnapshotToSubDisplay({
+    bool force = false,
+    bool showNoReceiverMessage = false,
+  }) async {
     if (_subDisplayCode.isEmpty) return;
+    if (!_hasSubDisplayReceiver) {
+      if (showNoReceiverMessage && mounted) {
+        _showNotReady('暂无子软件连接，已停止推送');
+      }
+      return;
+    }
     final project = _project;
     if (project == null) return;
     final scopedRows = _readScopedData(

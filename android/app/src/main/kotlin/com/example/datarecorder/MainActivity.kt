@@ -474,6 +474,8 @@ class MainActivity : FlutterActivity() {
 
     private fun cancelFastVoiceListening(result: MethodChannel.Result) {
         fastVoiceIgnoreResult = true
+        fastVoicePermissionStartResult?.error("cancelled", "语音识别已取消", null)
+        fastVoicePermissionStartResult = null
         fastVoiceStopResult?.success("")
         fastVoiceStopResult = null
         stopFastVoiceRecorder()

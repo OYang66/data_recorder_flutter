@@ -85,7 +85,7 @@ class LocalDatabase {
         qualityContent: project.qualityContent,
       ),
     );
-    await _syncFallbackProjects();
+    if (nativeId <= 0) await _syncFallbackProjects();
     return id;
   }
 
@@ -95,19 +95,19 @@ class LocalDatabase {
     if (id == null) {
       return;
     }
-    await _bridge.update(project);
+    final nativeUpdated = await _bridge.update(project);
     final index = _projects.indexWhere((item) => item.id == id);
     if (index >= 0) {
       _projects[index] = project;
-      await _syncFallbackProjects();
+      if (!nativeUpdated) await _syncFallbackProjects();
     }
   }
 
   Future<void> delete(ProjectEntity project) async {
     await _loadLegacyProjects();
-    await _bridge.delete(project);
+    final nativeDeleted = await _bridge.delete(project);
     _projects.removeWhere((item) => item.id == project.id);
-    await _syncFallbackProjects();
+    if (!nativeDeleted) await _syncFallbackProjects();
   }
 
   Future<List<ProjectEntity>> getAllProjects() async {

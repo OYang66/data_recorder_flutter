@@ -44,6 +44,30 @@ extension _MainPageRows on _MainPageState {
     await _saveMainState();
   }
 
+  void _queueEditedRowSave() {
+    if (!_hasEditingRow) return;
+    _editedRowSavePending = true;
+    _editedRowSaveTimer?.cancel();
+    _editedRowSaveTimer = Timer(
+      const Duration(milliseconds: 400),
+      () => unawaited(_flushQueuedEditedRowSave()),
+    );
+  }
+
+  Future<void> _flushQueuedEditedRowSave() async {
+    if (!_editedRowSavePending) return;
+    _editedRowSaveTimer?.cancel();
+    _editedRowSaveTimer = null;
+    _editedRowSavePending = false;
+    await _saveEditedCurrentRow();
+  }
+
+  void _clearQueuedEditedRowSave() {
+    _editedRowSaveTimer?.cancel();
+    _editedRowSaveTimer = null;
+    _editedRowSavePending = false;
+  }
+
   void _queueFastRowsSave(List<Map<String, String>> rows) {
     _pendingFastRowsSave = rows;
     _pendingFastRowsSaveBuildingName = _currentBuildingName;
@@ -94,7 +118,8 @@ extension _MainPageRows on _MainPageState {
       _setMainState(() {});
       return;
     }
-    final rows = _rows..add(current);
+    final rows = [..._rows, current];
+    _rowsCache = rows;
     _clearCurrentRow();
     if (_mode == MainMode.fast) {
       _queueFastRowsSave(rows);
@@ -104,6 +129,7 @@ extension _MainPageRows on _MainPageState {
   }
 
   Future<void> _saveEditedCurrentRow() async {
+    _clearQueuedEditedRowSave();
     final index = _editingRowIndex;
     if (index == null) return;
     final rows = _rows;
@@ -113,6 +139,7 @@ extension _MainPageRows on _MainPageState {
   }
 
   Future<void> _saveQualityEditedRow(Map<String, String> row) async {
+    if (_mode == MainMode.quality) _clearQueuedEditedRowSave();
     final index = _editingQualityRowIndex;
     if (index == null) return;
     final rows = _rows;
@@ -188,7 +215,7 @@ extension _MainPageRows on _MainPageState {
     List<Map<String, String>> rows, {
     Map<String, String>? vehicleInfo,
   }) {
-    final info = vehicleInfo ?? _vehicleInfoForCurrentTrip();
+    final info = vehicleInfo ?? _vehicleInfo;
     return [
       ...rows.where((row) => !_isLoadingMetaRow(row)),
       {

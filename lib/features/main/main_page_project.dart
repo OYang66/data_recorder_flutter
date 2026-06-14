@@ -683,47 +683,69 @@ extension _MainPageProject on _MainPageState {
     String initialValue = '',
     TextInputType? keyboardType,
     List<TextInputFormatter>? inputFormatters,
+    int minLines = 1,
+    int maxLines = 1,
   }) {
     final controller = TextEditingController(text: initialValue);
-    final field = TextField(
-      controller: controller,
-      autofocus: true,
-      keyboardType: keyboardType,
-      inputFormatters: inputFormatters,
-      decoration: InputDecoration(labelText: label, hintText: hintText),
-    );
-    final actions = AppDialogActionRow(
-      onCancel: () {
-        FocusManager.instance.primaryFocus?.unfocus();
-        Navigator.of(context).pop();
-      },
-      onConfirm: () {
-        FocusManager.instance.primaryFocus?.unfocus();
-        Navigator.of(context).pop(controller.text);
-      },
-    );
+
+    TextField inputField() {
+      return TextField(
+        controller: controller,
+        autofocus: true,
+        keyboardType: keyboardType,
+        inputFormatters: inputFormatters,
+        minLines: minLines,
+        maxLines: maxLines,
+        decoration: InputDecoration(labelText: label, hintText: hintText),
+      );
+    }
+
+    AppDialogActionRow actions(BuildContext dialogContext) {
+      return AppDialogActionRow(
+        onCancel: () {
+          FocusManager.instance.primaryFocus?.unfocus();
+          Navigator.of(dialogContext).pop();
+        },
+        onConfirm: () {
+          final text = controller.text;
+          FocusManager.instance.primaryFocus?.unfocus();
+          Navigator.of(dialogContext).pop(text);
+        },
+      );
+    }
+
     final future = anchorContext == null
         ? showAppCardDialog<String>(
             context: context,
             title: title,
             subtitle: subtitle ?? label,
-            builder: (context) => Column(
+            builder: (dialogContext) => Column(
               mainAxisSize: MainAxisSize.min,
-              children: [field, const SizedBox(height: 16), actions],
+              children: [
+                inputField(),
+                const SizedBox(height: 16),
+                actions(dialogContext),
+              ],
             ),
           )
         : _showAnchoredCard<String>(
             anchorContext: anchorContext,
             width: 320,
             maxHeight: 260,
-            child: _AnchoredMenuCard(
-              title: title,
-              subtitle: subtitle ?? label,
-              maxHeight: 170,
-              children: [field, actions],
+            child: Builder(
+              builder: (dialogContext) => _AnchoredMenuCard(
+                title: title,
+                subtitle: subtitle ?? label,
+                maxHeight: 170,
+                children: [inputField(), actions(dialogContext)],
+              ),
             ),
           );
-    return future.whenComplete(controller.dispose);
+    return future.whenComplete(
+      () => WidgetsBinding.instance.addPostFrameCallback((_) {
+        controller.dispose();
+      }),
+    );
   }
 
   Future<bool> _confirmDanger({

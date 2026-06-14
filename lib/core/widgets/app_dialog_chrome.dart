@@ -355,12 +355,17 @@ class AppDialogListItem extends StatelessWidget {
   }
 }
 
-void showAppToast(BuildContext context, String message) {
+void showAppToast(
+  BuildContext context,
+  String message, {
+  double bottomMargin = 24,
+}) {
   final messenger = ScaffoldMessenger.of(context);
   messenger.hideCurrentSnackBar();
   messenger.showSnackBar(
     SnackBar(
       behavior: SnackBarBehavior.floating,
+      margin: EdgeInsets.fromLTRB(16, 0, 16, bottomMargin),
       elevation: 0,
       backgroundColor: Colors.transparent,
       content: Center(

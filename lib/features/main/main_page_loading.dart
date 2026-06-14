@@ -89,7 +89,7 @@ extension _MainPageLoading on _MainPageState {
         _loadingIronWeightMode = mode;
       }
     });
-    await _saveLoadingMetaOnly(vehicleInfo: _vehicleInfoForCurrentTrip());
+    await _saveLoadingMetaOnly(vehicleInfo: _vehicleInfo);
   }
 
   void _resequenceLoadingAluminumPackages(List<Map<String, String>> rows) {
@@ -105,9 +105,7 @@ extension _MainPageLoading on _MainPageState {
   }
 
   double _loadingAluminumWeighbridgeWeight() {
-    return _loadingAluminumWeighbridgeWeightFromInfo(
-      _vehicleInfoForCurrentTrip(),
-    );
+    return _loadingAluminumWeighbridgeWeightFromInfo(_vehicleInfo);
   }
 
   double _loadingAluminumWeighbridgeWeightFromInfo(Map<String, String> info) {
@@ -124,7 +122,11 @@ extension _MainPageLoading on _MainPageState {
     if (_loadingAluminumWeightMode == 'WEIGHBRIDGE_TOTAL') {
       return _loadingAluminumWeighbridgeWeight();
     }
-    return _sumDouble(rows.where(_isAluminumLoadingRow).toList(), 'weight');
+    var total = 0.0;
+    for (final row in rows) {
+      if (_isAluminumLoadingRow(row)) total += _parseDouble(row['weight']);
+    }
+    return total;
   }
 
   bool _loadingWeightEditableForCurrentRow() {
@@ -253,13 +255,62 @@ extension _MainPageLoading on _MainPageState {
   }
 
   String _nextLoadingPackageNo() {
-    final rows = _rows.where(_isAluminumLoadingRow).toList();
     if (_loadingAluminumUsePackageCount) return '';
-    return (rows.length + 1).toString();
+    var count = 0;
+    for (final row in _rows) {
+      if (_isAluminumLoadingRow(row)) count++;
+    }
+    return (count + 1).toString();
+  }
+
+  Future<void> _showLoadingRemarkEditor(int? rowIndex) async {
+    final rowsBeforeEdit = _rows;
+    if (rowIndex != null &&
+        (rowIndex < 0 || rowIndex >= rowsBeforeEdit.length)) {
+      _showNotReady('备注编辑失败，请重新选择单元格');
+      return;
+    }
+    final initialValue = rowIndex == null
+        ? _loadingCurrent['remark'].orEmpty()
+        : rowsBeforeEdit[rowIndex]['remark'].orEmpty();
+    final input = await _showTextInputDialog(
+      title: '编辑备注',
+      label: '备注',
+      hintText: '请输入备注',
+      initialValue: initialValue,
+      keyboardType: TextInputType.multiline,
+      minLines: 4,
+      maxLines: 6,
+    );
+    if (!mounted || input == null) return;
+    final remark = input.trim();
+    try {
+      if (rowIndex == null) {
+        _setMainState(() => _loadingCurrent['remark'] = remark);
+        _queueCurrentDraftStateSave();
+        return;
+      }
+      final rows = [..._rows];
+      if (rowIndex < 0 || rowIndex >= rows.length) {
+        _showNotReady('备注保存失败，请重新选择单元格');
+        return;
+      }
+      rows[rowIndex] = {...rows[rowIndex], 'remark': remark};
+      _rowsCache = rows;
+      _setMainState(() {
+        _editingLoadingRowIndex = rowIndex;
+        _loadingCurrent = Map<String, String>.from(rows[rowIndex]);
+        _loadingField = LoadingField.remark;
+      });
+      await _saveRows(rows);
+      await _clearSavedCurrentDraftState();
+    } catch (_) {
+      if (mounted) _showNotReady('备注保存失败');
+    }
   }
 
   Future<void> _deductAluminumBoxWeight(int ironRowIndex) async {
-    final rows = _rows;
+    final rows = [..._rows];
     if (ironRowIndex < 0 || ironRowIndex >= rows.length) return;
     final ironRow = rows[ironRowIndex];
     if (!_isIronLoadingRow(ironRow) ||
@@ -279,10 +330,15 @@ extension _MainPageLoading on _MainPageState {
     if (value <= 0) return;
     try {
       final origin = _parseDouble(ironRow['weight']);
+      final originalRemark = ironRow['remark'].orEmpty().trim();
+      const deductRemark = '已扣除铝箱重量';
+      final updatedRemark = originalRemark.isEmpty
+          ? deductRemark
+          : '$originalRemark；$deductRemark';
       rows[ironRowIndex] = {
         ...ironRow,
         'weight': _formatNumber(origin - value),
-        'remark': '已扣除铝箱重量',
+        'remark': updatedRemark,
       };
       rows.add({
         ..._emptyLoadingRow(),

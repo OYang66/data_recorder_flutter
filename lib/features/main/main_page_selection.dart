@@ -34,10 +34,17 @@ extension _MainPageSelection on _MainPageState {
   }
 
   void _selectFieldByKey(int? rowIndex, String key) {
+    unawaited(_selectFieldByKeyAfterFlush(rowIndex, key));
+  }
+
+  Future<void> _selectFieldByKeyAfterFlush(int? rowIndex, String key) async {
+    await _flushQueuedEditedRowSave();
+    if (!mounted) return;
     var openQualityMaterialType = false;
     var openQualityType = false;
     var openQualityDescription = false;
     var openQualityPhoto = false;
+    var openLoadingRemark = false;
 
     _setMainState(() {
       switch (_mode) {
@@ -74,6 +81,7 @@ extension _MainPageSelection on _MainPageState {
           _loadingCurrent = rowIndex == null
               ? _loadingCurrent
               : Map<String, String>.from(_rows[rowIndex]);
+          openLoadingRemark = key == 'remark';
         case MainMode.quality:
           _qualityField = QualityField.values.firstWhere(
             (field) => field.name == key,
@@ -90,6 +98,7 @@ extension _MainPageSelection on _MainPageState {
       }
     });
 
+    if (openLoadingRemark) unawaited(_showLoadingRemarkEditor(rowIndex));
     if (openQualityMaterialType) unawaited(_showQualityMaterialTypeDialog());
     if (openQualityType) unawaited(_showQualityTypeDialog());
     if (openQualityDescription) unawaited(_showQualityDescriptionEditor());

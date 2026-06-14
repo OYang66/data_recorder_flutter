@@ -855,6 +855,16 @@ class _IndexedLoadingRow {
   final Map<String, String> row;
 }
 
+const int _visibleLoadingRowLimit = 5;
+
+void _appendVisibleLoadingRow(
+  List<_IndexedLoadingRow> rows,
+  _IndexedLoadingRow row,
+) {
+  rows.add(row);
+  if (rows.length > _visibleLoadingRowLimit) rows.removeAt(0);
+}
+
 class _LoadingDisplayCard extends StatelessWidget {
   const _LoadingDisplayCard({
     required this.rows,
@@ -898,20 +908,22 @@ class _LoadingDisplayCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final indexedRows = [
-      for (var index = 0; index < rows.length; index++)
-        _IndexedLoadingRow(index, rows[index]),
-    ];
-    final aluminumRows = indexedRows
-        .where((item) => _isAluminumLoadingRow(item.row))
-        .toList();
-    final ironRows = indexedRows
-        .where((item) => _isIronLoadingRow(item.row))
-        .toList();
+    final aluminumRows = <_IndexedLoadingRow>[];
+    final ironRows = <_IndexedLoadingRow>[];
+    var ironSinglePackageTotal = 0.0;
+    for (var index = 0; index < rows.length; index++) {
+      final row = rows[index];
+      if (_isAluminumLoadingRow(row)) {
+        _appendVisibleLoadingRow(aluminumRows, _IndexedLoadingRow(index, row));
+      } else if (_isIronLoadingRow(row)) {
+        _appendVisibleLoadingRow(ironRows, _IndexedLoadingRow(index, row));
+        ironSinglePackageTotal += _parseDouble(row['weight']);
+      }
+    }
     final ironWeighbridge = _loadingIronWeighbridgeWeightFromInfo(vehicleInfo);
     final ironTotal = ironUseWeighbridge
         ? ironWeighbridge
-        : _sumDouble(rows.where(_isIronLoadingRow).toList(), 'weight');
+        : ironSinglePackageTotal;
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(4),
@@ -1092,17 +1104,7 @@ class _LoadingSectionState extends State<_LoadingSection> {
 
   @override
   Widget build(BuildContext context) {
-    final allDisplayRows = [
-      for (final item in widget.rows)
-        _IndexedLoadingRow(
-          item.index,
-          item.index == widget.editingRowIndex && widget.currentRow != null
-              ? widget.currentRow!
-              : item.row,
-        ),
-    ];
-    final skipCount = allDisplayRows.length > 5 ? allDisplayRows.length - 5 : 0;
-    final displayRows = allDisplayRows.skip(skipCount).toList();
+    final displayRows = widget.rows;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -1160,6 +1162,11 @@ class _LoadingSectionState extends State<_LoadingSection> {
                             );
                           }
                           final item = displayRows[index];
+                          final row =
+                              item.index == widget.editingRowIndex &&
+                                  widget.currentRow != null
+                              ? widget.currentRow!
+                              : item.row;
                           final selectedRow =
                               item.index == widget.editingRowIndex ||
                               item.index < 0;
@@ -1168,8 +1175,8 @@ class _LoadingSectionState extends State<_LoadingSection> {
                             showIndexColumn: true,
                             columns: widget.columns,
                             row: widget.hideWeight
-                                ? {...item.row, 'weight': ''}
-                                : item.row,
+                                ? {...row, 'weight': ''}
+                                : row,
                             currentKey: selectedRow ? widget.currentKey : '',
                             selectedRow: selectedRow,
                             dataColumnWidth: dataColumnWidth,
@@ -1442,21 +1449,23 @@ class _FastVoiceHoldDialogBodyState extends State<_FastVoiceHoldDialogBody>
           ),
         ),
         const SizedBox(height: 18),
-        AnimatedBuilder(
-          animation: _controller,
-          builder: (context, child) {
-            return Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                _FastVoiceWaveBar(height: 18, progress: _waveProgress(0)),
-                const SizedBox(width: 8),
-                _FastVoiceWaveBar(height: 28, progress: _waveProgress(1)),
-                const SizedBox(width: 8),
-                _FastVoiceWaveBar(height: 22, progress: _waveProgress(2)),
-              ],
-            );
-          },
+        RepaintBoundary(
+          child: AnimatedBuilder(
+            animation: _controller,
+            builder: (context, child) {
+              return Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  _FastVoiceWaveBar(height: 18, progress: _waveProgress(0)),
+                  const SizedBox(width: 8),
+                  _FastVoiceWaveBar(height: 28, progress: _waveProgress(1)),
+                  const SizedBox(width: 8),
+                  _FastVoiceWaveBar(height: 22, progress: _waveProgress(2)),
+                ],
+              );
+            },
+          ),
         ),
         const SizedBox(height: 14),
         const Text(
@@ -1628,24 +1637,20 @@ class _FastVoiceButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        return Listener(
-          behavior: HitTestBehavior.opaque,
-          onPointerDown: (_) => onHoldStart(),
-          onPointerUp: (_) => onHoldEnd(),
-          onPointerCancel: (_) {},
-          child: AnimatedScale(
-            scale: pressed ? 0.92 : 1,
-            duration: const Duration(milliseconds: 110),
-            curve: Curves.easeOut,
-            child: CustomPaint(
-              painter: _FastVoiceButtonPainter(pressed: pressed),
-              child: const SizedBox.expand(),
-            ),
-          ),
-        );
-      },
+    return Listener(
+      behavior: HitTestBehavior.opaque,
+      onPointerDown: (_) => onHoldStart(),
+      onPointerUp: (_) => onHoldEnd(),
+      onPointerCancel: (_) => onHoldCancel(),
+      child: AnimatedScale(
+        scale: pressed ? 0.92 : 1,
+        duration: const Duration(milliseconds: 90),
+        curve: Curves.easeOut,
+        child: CustomPaint(
+          painter: _FastVoiceButtonPainter(pressed: pressed),
+          child: const SizedBox.expand(),
+        ),
+      ),
     );
   }
 }

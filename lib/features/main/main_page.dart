@@ -89,6 +89,8 @@ class MainPage extends StatefulWidget {
 }
 
 class _MainPageState extends State<MainPage> with WidgetsBindingObserver {
+  static bool _startupUpdateCheckedThisSession = false;
+
   static const _exportChannel = MethodChannel(
     'com.example.datarecorder/export_share',
   );
@@ -143,6 +145,8 @@ class _MainPageState extends State<MainPage> with WidgetsBindingObserver {
   Timer? _subDisplayStatusTimer;
   Timer? _draftStateTimer;
   Timer? _fastRowsSaveTimer;
+  Timer? _editedRowSaveTimer;
+  bool _editedRowSavePending = false;
   List<Map<String, String>>? _pendingFastRowsSave;
   String? _pendingFastRowsSaveBuildingName;
   String? _pendingFastRowsSavePackageName;
@@ -155,6 +159,7 @@ class _MainPageState extends State<MainPage> with WidgetsBindingObserver {
   bool _fastVoiceDialogVisible = false;
   OverlayEntry? _fastVoiceDialogEntry;
   DateTime? _fastVoicePressStartedAt;
+  Timer? _fastVoiceStartTimeoutTimer;
   Timer? _fastVoiceTimeoutTimer;
   int _fastVoiceHoldGeneration = 0;
 
@@ -162,6 +167,10 @@ class _MainPageState extends State<MainPage> with WidgetsBindingObserver {
     if (!mounted) return;
     setState(fn);
   }
+
+  bool get _hasSubDisplayReceiver =>
+      _subDisplayCode.isNotEmpty &&
+      (_subDisplayConnected == true || _subDisplaySessionCount > 0);
 
   @override
   void initState() {
@@ -177,11 +186,13 @@ class _MainPageState extends State<MainPage> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _saveCurrentDraft();
+    _editedRowSaveTimer?.cancel();
+    unawaited(_saveCurrentDraft());
     _historyBackupTimer?.cancel();
     _subDisplayStatusTimer?.cancel();
     _draftStateTimer?.cancel();
     unawaited(_flushFastRowsSave());
+    _fastVoiceStartTimeoutTimer?.cancel();
     _fastVoiceTimeoutTimer?.cancel();
     unawaited(_fastVoiceChannel.invokeMethod<void>('cancelListening'));
     super.dispose();
@@ -253,7 +264,7 @@ class _MainPageState extends State<MainPage> with WidgetsBindingObserver {
                         ironWeightTitle: _loadingWeightHeader(false),
                         ironUseWeighbridge:
                             _loadingIronWeightMode == 'WEIGHBRIDGE_TOTAL',
-                        vehicleInfo: _vehicleInfoForCurrentTrip(),
+                        vehicleInfo: _vehicleInfo,
                         summaryPrimary: summaryPrimary,
                         summarySecondary: summarySecondary,
                         onDelete: _deleteRow,

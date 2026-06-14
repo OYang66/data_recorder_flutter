@@ -244,9 +244,10 @@ extension _MainPageMore on _MainPageState {
       }
       final data = status.data;
       final devices = data?.devices ?? const <AppSubDisplayDevice>[];
+      final sessionCount = data?.sessionCount ?? devices.length;
       _setMainState(() {
-        _subDisplayConnected = data?.connected == true;
-        _subDisplaySessionCount = data?.sessionCount ?? devices.length;
+        _subDisplayConnected = data?.connected == true || sessionCount > 0;
+        _subDisplaySessionCount = sessionCount;
       });
       await showAppCardDialog<void>(
         context: context,
@@ -352,13 +353,18 @@ extension _MainPageMore on _MainPageState {
     );
   }
 
-  Future<void> _checkAppUpdate() async {
+  Future<void> _checkAppUpdate({
+    bool showNoUpdateToast = true,
+    bool showErrorToast = true,
+  }) async {
     try {
       final response = await _versionRepository.getLatestVersion();
       final info = response.data;
       if (!mounted) return;
       if (!response.isSuccess || info == null || info.downloadUrl.isEmpty) {
-        _showNotReady(response.displayMessage.ifEmpty('当前已是最新版本'));
+        if (showNoUpdateToast) {
+          _showNotReady(response.displayMessage.ifEmpty('当前已是最新版本'));
+        }
         return;
       }
       final shouldUpdate = await showAppCardDialog<bool>(
@@ -400,7 +406,7 @@ extension _MainPageMore on _MainPageState {
             'versionCode': info.versionCode,
           });
     } catch (error) {
-      if (mounted) _showNotReady('更新失败，请检查网络');
+      if (mounted && showErrorToast) _showNotReady('更新失败，请检查网络');
     }
   }
 

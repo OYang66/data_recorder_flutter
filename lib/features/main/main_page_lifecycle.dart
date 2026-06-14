@@ -2,6 +2,8 @@ part of 'main_page.dart';
 
 extension _MainPageLifecycle on _MainPageState {
   Future<void> _saveCurrentDraft() async {
+    final flushedEditedRow = _editedRowSavePending;
+    await _flushQueuedEditedRowSave();
     await _saveMainState();
     if (_project == null) return;
     final hasCurrentRow = !_isEmptyRow(_currentRow);
@@ -11,7 +13,7 @@ extension _MainPageLifecycle on _MainPageState {
       await _clearSavedCurrentDraftState();
     }
     if (_hasEditingRow) {
-      await _saveEditedCurrentRow();
+      if (!flushedEditedRow) await _saveEditedCurrentRow();
       await _clearSavedCurrentDraftState();
       return;
     }
@@ -142,7 +144,15 @@ extension _MainPageLifecycle on _MainPageState {
     if (_mode == MainMode.fast && _subDisplayCode.isNotEmpty) {
       unawaited(_refreshSubDisplayStatus());
     }
+    await _checkStartupAppUpdateOnce();
+    if (!mounted) return;
     unawaited(_checkLatestNoticeAndShowOnce());
+  }
+
+  Future<void> _checkStartupAppUpdateOnce() async {
+    if (_MainPageState._startupUpdateCheckedThisSession) return;
+    _MainPageState._startupUpdateCheckedThisSession = true;
+    await _checkAppUpdate(showNoUpdateToast: false, showErrorToast: false);
   }
 
   Future<void> _restoreCurrentDraftState() async {
@@ -490,10 +500,12 @@ extension _MainPageLifecycle on _MainPageState {
         }
         return;
       }
-      final connected = status.data?.connected == true;
+      final statusData = status.data;
+      final sessionCount = statusData?.sessionCount ?? 0;
+      final connected = statusData?.connected == true || sessionCount > 0;
       _setMainState(() {
         _subDisplayConnected = connected;
-        _subDisplaySessionCount = status.data?.sessionCount ?? 0;
+        _subDisplaySessionCount = sessionCount;
       });
       if (!wasConnected && connected) {
         unawaited(_pushFastSnapshotToSubDisplay(force: true));

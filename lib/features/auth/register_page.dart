@@ -1,4 +1,3 @@
-import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
@@ -7,6 +6,7 @@ import '../../core/constants/app_colors.dart';
 import '../../core/storage/preferences.dart';
 import '../../core/widgets/app_dialog_chrome.dart';
 import '../../data/repositories/auth_repository.dart';
+import 'auth_network_retry.dart';
 
 class RegisterPage extends StatefulWidget {
   const RegisterPage({super.key});
@@ -51,7 +51,15 @@ class _RegisterPageState extends State<RegisterPage> {
 
     setState(() => _loading = true);
     try {
-      final check = await _repository.checkRegisterAccount(username);
+      final check = await runWithIosNetworkAuthorizationRetry(
+        () => _repository.checkRegisterAccount(username),
+        isMounted: () => mounted,
+        onWaitingForAuthorization: () {
+          if (mounted) {
+            _showMessage('请先完成系统网络授权，授权后自动继续注册');
+          }
+        },
+      );
       if (!mounted) {
         return;
       }
@@ -60,7 +68,15 @@ class _RegisterPageState extends State<RegisterPage> {
         return;
       }
 
-      final response = await _repository.register(username, password);
+      final response = await runWithIosNetworkAuthorizationRetry(
+        () => _repository.register(username, password),
+        isMounted: () => mounted,
+        onWaitingForAuthorization: () {
+          if (mounted) {
+            _showMessage('请先完成系统网络授权，授权后自动继续注册');
+          }
+        },
+      );
       if (!mounted) {
         return;
       }
@@ -89,24 +105,7 @@ class _RegisterPageState extends State<RegisterPage> {
     showAppToast(context, message);
   }
 
-  String _networkErrorMessage(Object error) {
-    if (error is DioException) {
-      final message = error.message ?? '';
-      if (message.contains('Operation not permitted') ||
-          message.contains('Network is unreachable')) {
-        return 'iOS 未放行网络访问，巨魔安装请在“设置-无线局域网/蜂窝网络”查找“铝模工作录”，或卸载后重装触发网络授权';
-      }
-      if (message.contains('SocketException') ||
-          message.contains('Connection failed')) {
-        return '网络连接失败：${message.ifEmpty(error.type.name)}';
-      }
-      if (message.contains('ATS') || message.contains('cleartext')) {
-        return 'iOS 已拦截 HTTP 网络请求，请重新打包安装最新版';
-      }
-      return '网络异常：${message.ifEmpty(error.type.name)}';
-    }
-    return '网络异常，请稍后重试';
-  }
+  String _networkErrorMessage(Object error) => authNetworkErrorMessage(error);
 
   Future<void> _openTutorial() async {
     const url = 'https://yxff.work/';

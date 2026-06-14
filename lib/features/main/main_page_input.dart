@@ -19,20 +19,20 @@ extension _MainPageInput on _MainPageState {
           if (_qualityField == QualityField.installNumber ||
               _qualityField == QualityField.model) {
             warning = _appendQualityToken(token);
-            saveQualityEdit = warning == null;
+            saveQualityEdit =
+                warning == null && _editingQualityRowIndex != null;
           }
       }
     });
     if (warning != null) {
       _showNotReady(warning!);
-    } else if (!saveLoadingEdit) {
+    } else if (!saveLoadingEdit && !saveQualityEdit) {
       _queueCurrentDraftStateSave();
     }
-    if (saveLoadingEdit) {
+    if (saveLoadingEdit || saveQualityEdit) {
       unawaited(_clearSavedCurrentDraftState());
-      unawaited(_saveEditedCurrentRow());
+      _queueEditedRowSave();
     }
-    if (saveQualityEdit) unawaited(_saveQualityEditedRow(_qualityCurrent));
   }
 
   void _backspace() {
@@ -54,13 +54,12 @@ extension _MainPageInput on _MainPageState {
       if (value.isNotEmpty) row[key] = value.substring(0, value.length - 1);
       if (_mode == MainMode.fast) _lastSubDisplayPayload = null;
     });
-    if (saveLoadingEdit) {
+    if (saveLoadingEdit || saveQualityEdit) {
       unawaited(_clearSavedCurrentDraftState());
-      unawaited(_saveEditedCurrentRow());
+      _queueEditedRowSave();
     } else {
       _queueCurrentDraftStateSave();
     }
-    if (saveQualityEdit) unawaited(_saveQualityEditedRow(_qualityCurrent));
   }
 
   String get _currentKey => switch (_mode) {

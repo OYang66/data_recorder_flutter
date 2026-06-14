@@ -88,9 +88,7 @@ class FastVoiceAudioRecorder(
                     recorder.stop()
                 }
             }
-            runCatching { recorder.release() }
         }
-        audioRecord = null
     }
 
     fun release() {
