@@ -354,7 +354,11 @@ class MainActivity : FlutterActivity() {
             val result = fastVoicePermissionStartResult ?: return
             fastVoicePermissionStartResult = null
             if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
-                beginFastVoiceListening(result)
+                result.error(
+                    "permission_granted_retry",
+                    "录音权限已开启，请重新长按语音识别",
+                    null
+                )
             } else {
                 result.error("permission_denied", "未授予录音权限，无法使用语音识别", null)
             }
@@ -425,6 +429,7 @@ class MainActivity : FlutterActivity() {
             return
         }
         try {
+            stopFastVoiceRecorder()
             fastVoiceHandler.removeCallbacks(fastVoiceCompleteRunnable)
             fastVoiceHandler.removeCallbacks(fastVoiceTimeoutRunnable)
             fastSparkTextBuilder.setLength(0)

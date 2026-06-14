@@ -245,6 +245,7 @@ extension _MainPageFastVoice on _MainPageState {
     if (error is PlatformException) {
       return switch (error.code) {
         'permission_denied' => '未授予录音权限，无法使用语音识别',
+        'permission_granted_retry' => '录音权限已开启，请重新长按语音识别',
         'speech_permission_denied' => '未授予语音识别权限，无法使用语音识别',
         'unavailable' => '当前设备不支持系统语音识别',
         'start_failed' => '语音识别启动失败，请稍后重试',

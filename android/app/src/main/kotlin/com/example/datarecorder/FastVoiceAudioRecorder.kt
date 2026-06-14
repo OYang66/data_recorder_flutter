@@ -71,6 +71,9 @@ class FastVoiceAudioRecorder(
                 if (audioRecord === recorder) {
                     audioRecord = null
                 }
+                if (recordThread === Thread.currentThread()) {
+                    recordThread = null
+                }
             }
         }.apply {
             name = "FastVoiceAudioRecorder"
@@ -80,14 +83,20 @@ class FastVoiceAudioRecorder(
 
     fun stop() {
         running.set(false)
-        recordThread?.interrupt()
-        recordThread = null
+        val thread = recordThread
         audioRecord?.let { recorder ->
             runCatching {
                 if (recorder.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
                     recorder.stop()
                 }
             }
+        }
+        thread?.interrupt()
+        if (thread != null && thread !== Thread.currentThread()) {
+            runCatching { thread.join(400) }
+        }
+        if (recordThread === thread && thread?.isAlive != true) {
+            recordThread = null
         }
     }
 
