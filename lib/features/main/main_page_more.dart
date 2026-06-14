@@ -353,6 +353,18 @@ extension _MainPageMore on _MainPageState {
     );
   }
 
+  Future<int> _installedAppVersionCode() async {
+    if (!Platform.isAndroid) return 0;
+    try {
+      final version = await _MainPageState._updateChannel
+          .invokeMapMethod<String, Object?>('getInstalledVersion');
+      final value = version?['versionCode'];
+      return value is num ? value.toInt() : int.tryParse('$value') ?? 0;
+    } catch (_) {
+      return 0;
+    }
+  }
+
   Future<void> _checkAppUpdate({
     bool showNoUpdateToast = true,
     bool showErrorToast = true,
@@ -364,6 +376,15 @@ extension _MainPageMore on _MainPageState {
       if (!response.isSuccess || info == null || info.downloadUrl.isEmpty) {
         if (showNoUpdateToast) {
           _showNotReady(response.displayMessage.ifEmpty('当前已是最新版本'));
+        }
+        return;
+      }
+      final installedVersionCode = await _installedAppVersionCode();
+      if (!mounted) return;
+      if (installedVersionCode > 0 &&
+          info.versionCode <= installedVersionCode) {
+        if (showNoUpdateToast) {
+          _showNotReady('当前已是最新版本');
         }
         return;
       }

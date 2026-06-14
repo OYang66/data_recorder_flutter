@@ -130,6 +130,9 @@ class MainActivity : FlutterActivity() {
                         }
                     }.start()
                 }
+                "getInstalledVersion" -> {
+                    result.success(installedVersionInfo())
+                }
                 "openUrl" -> {
                     val url = call.argument<String>("url") ?: ""
                     startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
@@ -244,6 +247,20 @@ class MainActivity : FlutterActivity() {
                 else -> result.notImplemented()
             }
         }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun installedVersionInfo(): Map<String, Any> {
+        val packageInfo = packageManager.getPackageInfo(packageName, 0)
+        val versionCode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            packageInfo.longVersionCode
+        } else {
+            packageInfo.versionCode.toLong()
+        }
+        return mapOf(
+            "versionCode" to versionCode,
+            "versionName" to packageInfo.versionName.orEmpty()
+        )
     }
 
     override fun onNewIntent(intent: Intent) {

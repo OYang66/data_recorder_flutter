@@ -10,6 +10,9 @@ import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
 import android.provider.Settings
 import android.view.Gravity
 import android.view.ViewGroup
@@ -20,13 +23,18 @@ import android.widget.Toast
 import androidx.core.content.FileProvider
 import java.io.File
 import java.io.FileOutputStream
+import java.net.HttpURLConnection
 import java.net.URL
+import java.net.URLConnection
 import java.text.DecimalFormat
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 class AppUpdateDownloadHandler(private val activity: Activity) {
     private val prefs by lazy {
         activity.getSharedPreferences("app_update_cache", Activity.MODE_PRIVATE)
     }
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     private val downloadedVersionCodeKey = "downloaded_version_code"
     private val downloadedApkPathKey = "downloaded_apk_path"
@@ -37,6 +45,8 @@ class AppUpdateDownloadHandler(private val activity: Activity) {
     private var progressBar: ProgressBar? = null
     private var percentView: TextView? = null
     private var sizeView: TextView? = null
+    private var lastProgressPercent = -1
+    private var lastProgressUpdateAt = 0L
 
     fun onHostResume() {
         clearInstalledUpdateCache()
@@ -65,7 +75,7 @@ class AppUpdateDownloadHandler(private val activity: Activity) {
             return cachedApk.absolutePath
         }
 
-        activity.runOnUiThread { showDownloadProgressDialog() }
+        showDownloadProgressDialogBlocking()
         return try {
             val apkFile = downloadApk(url, versionCode)
             saveDownloadedApkInfo(versionCode, apkFile)
@@ -151,31 +161,53 @@ class AppUpdateDownloadHandler(private val activity: Activity) {
         val tempFile = File(dir, "${finalFile.name}.download")
         if (tempFile.exists()) tempFile.delete()
 
-        val connection = URL(url).openConnection()
-        val totalBytes = connection.contentLengthLong
-        connection.getInputStream().use { input ->
-            FileOutputStream(tempFile).use { output ->
-                val buffer = ByteArray(8 * 1024)
-                var downloadedBytes = 0L
-                while (true) {
-                    val length = input.read(buffer)
-                    if (length == -1) break
-                    output.write(buffer, 0, length)
-                    downloadedBytes += length
-                    updateProgress(downloadedBytes, totalBytes)
+        val connection = URL(url).openConnection().apply {
+            connectTimeout = 15_000
+            readTimeout = 30_000
+            setRequestProperty("Accept-Encoding", "identity")
+        }
+        try {
+            val totalBytes = contentLength(connection)
+            updateProgress(0L, totalBytes, force = true)
+            connection.getInputStream().use { input ->
+                FileOutputStream(tempFile).use { output ->
+                    val buffer = ByteArray(64 * 1024)
+                    var downloadedBytes = 0L
+                    while (true) {
+                        val length = input.read(buffer)
+                        if (length == -1) break
+                        output.write(buffer, 0, length)
+                        downloadedBytes += length
+                        updateProgress(downloadedBytes, totalBytes)
+                    }
+                    output.flush()
                 }
-                output.flush()
             }
-        }
 
-        if (finalFile.exists()) finalFile.delete()
-        if (!tempFile.renameTo(finalFile)) {
-            tempFile.copyTo(finalFile, overwrite = true)
-            tempFile.delete()
+            if (finalFile.exists()) finalFile.delete()
+            if (!tempFile.renameTo(finalFile)) {
+                tempFile.copyTo(finalFile, overwrite = true)
+                tempFile.delete()
+            }
+            deleteOldCachedApks(keepFileName = finalFile.name)
+            updateProgress(
+                totalBytes.takeIf { it > 0 } ?: finalFile.length(),
+                totalBytes,
+                force = true
+            )
+            return finalFile
+        } finally {
+            (connection as? HttpURLConnection)?.disconnect()
         }
-        deleteOldCachedApks(keepFileName = finalFile.name)
-        updateProgress(totalBytes.takeIf { it > 0 } ?: finalFile.length(), totalBytes)
-        return finalFile
+    }
+
+    private fun contentLength(connection: URLConnection): Long {
+        val contentLength = connection.contentLengthLong
+        if (contentLength > 0) return contentLength
+        val rangeTotal = connection.getHeaderField("Content-Range")
+            ?.substringAfterLast('/')
+            ?.toLongOrNull()
+        return rangeTotal ?: -1L
     }
 
     private fun installApk(file: File) {
@@ -205,6 +237,8 @@ class AppUpdateDownloadHandler(private val activity: Activity) {
 
     private fun showDownloadProgressDialog() {
         dismissDownloadProgressDialog()
+        lastProgressPercent = -1
+        lastProgressUpdateAt = 0L
         val root = LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(20), dp(20), dp(20), dp(20))
@@ -261,6 +295,15 @@ class AppUpdateDownloadHandler(private val activity: Activity) {
         }
     }
 
+    private fun showDownloadProgressDialogBlocking() {
+        val latch = CountDownLatch(1)
+        activity.runOnUiThread {
+            showDownloadProgressDialog()
+            latch.countDown()
+        }
+        latch.await(1, TimeUnit.SECONDS)
+    }
+
     private fun dismissDownloadProgressDialog() {
         downloadDialog?.dismiss()
         downloadDialog = null
@@ -269,15 +312,27 @@ class AppUpdateDownloadHandler(private val activity: Activity) {
         sizeView = null
     }
 
-    private fun updateProgress(downloadedBytes: Long, totalBytes: Long) {
-        activity.runOnUiThread {
-            val progress = if (totalBytes > 0) {
-                ((downloadedBytes * 100) / totalBytes).toInt().coerceIn(0, 100)
-            } else {
-                0
-            }
+    private fun updateProgress(downloadedBytes: Long, totalBytes: Long, force: Boolean = false) {
+        val progress = if (totalBytes > 0) {
+            ((downloadedBytes * 100) / totalBytes).toInt().coerceIn(0, 100)
+        } else {
+            0
+        }
+        val now = SystemClock.uptimeMillis()
+        if (!force &&
+            progress == lastProgressPercent &&
+            now - lastProgressUpdateAt < 200
+        ) {
+            return
+        }
+        if (!force && totalBytes > 0 && progress == lastProgressPercent) return
+        lastProgressPercent = progress
+        lastProgressUpdateAt = now
+
+        mainHandler.post {
+            progressBar?.isIndeterminate = totalBytes <= 0
             progressBar?.progress = progress
-            percentView?.text = "$progress%"
+            percentView?.text = if (totalBytes > 0) "$progress%" else "下载中"
             val totalText = if (totalBytes > 0) formatFileSize(totalBytes) else "未知大小"
             sizeView?.text = "${formatFileSize(downloadedBytes)} / $totalText"
         }
