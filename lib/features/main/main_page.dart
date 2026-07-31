@@ -19,6 +19,7 @@ import '../../data/repositories/auth_repository.dart';
 import '../../data/repositories/project_repository.dart';
 import '../../data/repositories/server_repository.dart';
 import '../../data/repositories/version_repository.dart';
+import 'project_name_search.dart';
 
 part 'main_page_lifecycle.dart';
 part 'main_page_rows.dart';
